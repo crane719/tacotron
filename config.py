@@ -9,3 +9,8 @@ import scipy
 window = scipy.signal.hann(N)
 p = 0.97 # pre emphasis
 
+# directory
+original_dataconf_dir = "./ja/transcript.txt"
+original_data_dir = "./ja/meian/*"
+dataset_dir = "./dataset/"
+
