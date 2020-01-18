@@ -10,6 +10,9 @@ def methods(obj):
     for method in dir(obj):
         print(method)
 
+def get_filedirs(required_dir):
+    return glob.glob(required_dir)
+
 def make_dir(required_dirs):
     dirs = glob.glob("*")
     for required_dir in required_dirs:
