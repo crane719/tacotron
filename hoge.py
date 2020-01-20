@@ -20,7 +20,6 @@ def make_dir(required_dirs):
             print("generate file in current dir...")
             print("+ "+required_dir)
             os.mkdir(required_dir)
-        print("\n")
 
 def recreate_dir(directory):
     for dir in directory:

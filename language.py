@@ -55,5 +55,5 @@ class Ja():
         return renew_text
 
     @property
-    def get_hiradict():
+    def get_hiradict(self):
         return self.hira_list
