@@ -16,11 +16,12 @@ class Ja():
         while node:
             word = node.surface
             wclass = node.feature.split(',')
-            if wclass[0] != u'BOS/EOS':
-                if wclass[6] == None:
-                    word_class.append((word,wclass[0],wclass[1],wclass[2],"", wclass[7]))
-                else:
-                    word_class.append((word,wclass[0],wclass[1],wclass[2],wclass[6], wclass[7]))
+            if len(wclass)>=8:
+                if wclass[0] != u'BOS/EOS':
+                    if wclass[6] == None:
+                        word_class.append((word,wclass[0],wclass[1],wclass[2],"", wclass[7]))
+                    else:
+                        word_class.append((word,wclass[0],wclass[1],wclass[2],wclass[6], wclass[7]))
             node = node.next
         return word_class
 

@@ -1,7 +1,7 @@
 import torch
 from torch import nn
-import config
 import hoge
+import language
 
 class EncoderCBHG(nn.Module):
     def __init__():
@@ -79,7 +79,7 @@ class Decoder(nn.Module):
 # paper曰く今回は50(なお30でも充分らしい)
 
 # わんちゃんこれか? https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.istft.html
-class tactron():
+class Tacotron():
     def __init__():
         encoder = self.Encoder()
         decoder = self.Decoder()
