@@ -88,24 +88,13 @@ class Preprocess():
             spectrogram = np.array(spectrogram)
             if spectrogram.shape[0] > max_len:
                 max_len = spectrogram.shape[0]
-            # tmp
             joblib.dump(spectrogram, ini["directory"]["dataset"]+"/spectrogram/%d"%(filenum), compress=3)
 
         # padding
         dirs = hoge.get_filedirs(ini["directory"]["dataset"]+"/spectrogram/*")
         dirs = sorted(dirs)
-        spectrums = []
-        for directory in dirs:
-            spectrum = joblib.load(directory)
-            diff = max_len - spectrum.shape[0]
-            spectrum = np.concatenate((spectrum, np.zeros((diff, spectrum.shape[1]))), 0)
-            spectrums.append(spectrum)
-        data = torch.Tensor(np.array(spectrums))
-        label = torch.LongTensor(list(range(data.shape[0]))).view(-1, 1)
-        dataset = TensorDataset(label, data)
-        dataloader = DataLoader(dataset)
-        hoge.recreate_dir([ini["directory"]["dataset"]+"/spectrogram"])
-        #joblib.dump(dataloader, ini["directory"]["dataset"]+"/spectrogram/dataloader", compress=3)
-        f = open(ini["directory"]["dataset"]+"/spectrogram/dataloader", "w")
-        pickle.dump(dataloader, f)
-
+        for i,directory in enumerate(dirs):
+            spectrogram = joblib.load(directory)
+            diff = max_len - spectrogram.shape[0]
+            spectrogram = np.concatenate((spectrogram, np.zeros((diff, spectrogram.shape[1]))), 0)
+            joblib.dump(spectrogram, ini["directory"]["dataset"]+"/spectrogram/%d"%(filenum), compress=3)
