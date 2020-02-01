@@ -2,32 +2,43 @@ import torch
 from torch import nn
 import hoge
 import language
+import configparser
+
+ja = language.Ja()
+ini = configparser.ConfigParser()
+ini.read("./config.ini")
 
 class EncoderCBHG(nn.Module):
-    def __init__():
+    def __init__(self):
+        super(EncoderCBHG, self).__init__()
+        encoder_filter = int(ini["modelparameter"]["encoder_filter"])
+        encoder_filter_set = list(range(1, encoder_filter+1))
+
         self.relu = nn.ReLU()
-        # errorが出たらmodule dictに変更する予定
-        # inputなどを加味して後で全てのconvにpoolを追加
-        self.convs = nn.ModuleList([nn.Conv1d(1, 1, fileter_size, stride=1, padding=0)\
+        self.convs = nn.ModuleList([nn.Conv1d(1, 1, filter_size, stride=1, padding=0)\
                                     for filter_size in encoder_filter_set])
-        self.pool = nn.Maxpool1d(2, stride=1, padding=0)
+        self.pool = nn.MaxPool1d(2, stride=1, padding=0)
         self.conv = nn.Conv1d(1, 1, 3, stride=1, padding=0)
         self.highway = highway_net(128, 4, self.relu)
-        self.gru = nn.GRU(128, hidden_size, num_layers, batch_first=True, bidirectional=True) # ワンチャン自分でgruの実装
+        self.gru = nn.GRU(128, 128, 1, batch_first=True, bidirectional=True) # ワンチャン自分でgruの実装
 
 class DecoderCBHG(nn.Module):
-    def __init__():
+    def __init__(self):
+        super(DecoderCBHG, self).__init__()
+        decoder_filter = int(ini["modelparameter"]["decoder_filter"])
+        decoder_filter_set = list(range(1, decoder_filter+1))
+
         self.relu = nn.ReLU()
         # errorが出たらmodule dictに変更する予定
         # inputなどを加味して後で全てのconvにpoolを追加
-        self.convs = nn.ModuleList([nn.Conv1d(1, 1, fileter_size, stride=1, padding=0)\
+        self.convs = nn.ModuleList([nn.Conv1d(1, 1, filter_size, stride=1, padding=0)\
                                     for filter_size in decoder_filter_set])
         # 256, 80になるように調整
         self.conv1 = nn.Conv1d(1, 1, 3, stride=1, padding=0)
         self.conv2 = nn.Conv1d(1, 1, 3, stride=1, padding=0)
 
         self.highway = highway_net(128, 4, self.relu)
-        self.gru = nn.GRU(128, hidden_size, num_layers, batch_first=True, bidirectional=True) # ワンチャン自分でgruの実装
+        self.gru = nn.GRU(128, 128, 1, batch_first=True, bidirectional=True) # ワンチャン自分でgruの実装
 
 class highway_net(nn.Module):
     def __init__(self, size, num_layers, f):
@@ -47,9 +58,10 @@ class highway_net(nn.Module):
         return x
 
 class Encoder(nn.Module):
-    def __init__():
+    def __init__(self):
+        super(Encoder, self).__init__()
         self.cbhg = EncoderCBHG()
-        self.emb = nn.Embedding(, 256)
+        self.emb = nn.Embedding(len(ja.get_hiralist), 256)
         self.fc1 = nn.Linear(256, 256)
         self.fc2 = nn.Linear(256, 128)
         self.dropout = nn.Dropout(0.5)
@@ -58,9 +70,10 @@ class Encoder(nn.Module):
 # residual機能を使う
 # all-zeroを最初のフレームとして用いる
 class Decoder(nn.Module):
-    def __init__():
+    def __init__(self):
+        super(Decoder, self).__init__()
         self.cbhg = DecoderCBHG()
-        self.emb = nn.Embedding(, 256)
+        self.emb = nn.Embedding(len(ja.get_hiralist), 256)
         self.fc1 = nn.Linear(256, 256)
         self.fc2 = nn.Linear(256, 128)
         self.dropout = nn.Dropout(0.5)
@@ -80,6 +93,6 @@ class Decoder(nn.Module):
 
 # わんちゃんこれか? https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.istft.html
 class Tacotron():
-    def __init__():
-        encoder = self.Encoder()
-        decoder = self.Decoder()
+    def __init__(self):
+        self.encoder = Encoder()
+        self.decoder = Decoder()

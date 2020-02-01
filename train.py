@@ -1,8 +1,8 @@
 import preprocess as pp
-#import models
+import models
 import configparser
 
-is_preprocess = True
+is_preprocess = False
 
 ini = configparser.ConfigParser()
 ini.read("./config.ini")
@@ -10,4 +10,5 @@ ini.read("./config.ini")
 if is_preprocess:
     pp.Preprocess()
 
-#tacorron = models.Tacotron()
+tacorron = models.Tacotron()
+
