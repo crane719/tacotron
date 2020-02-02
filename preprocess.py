@@ -8,7 +8,6 @@ from scipy import signal
 from scipy.fftpack import fft, fftshift
 import math
 import torch
-import pickle
 from torch.utils.data import TensorDataset, DataLoader
 
 class Preprocess():
@@ -40,6 +39,7 @@ class Preprocess():
         raw_dataconf = list(reversed(raw_dataconf.split("\n")))
         labels = []
         i = 0
+        max_len = 0
         data_len = len(raw_dataconf)
         while len(raw_dataconf):
             if i%100==0:
@@ -50,8 +50,19 @@ class Preprocess():
                 break
             text = col.split("|")[1]
             label = ja.kana2label(text)
-            joblib.dump(label, ini["directory"]["dataset"]+"/label_data/%d"%(i), compress=3)
+
+            if len(label) > max_len:
+                max_len = len(label)
+            joblib.dump(torch.LongTensor(label), ini["directory"]["dataset"]+"/label_data/%d"%(i), compress=3)
             i += 1
+
+        # padding
+        dirs = hoge.get_filedirs(ini["directory"]["dataset"]+"/label_data/*")
+        for i,directory in enumerate(dirs):
+            label = joblib.load(directory)
+            diff = max_len - label.shape[0]
+            label = np.concatenate((label, np.ones((diff))*len(ja.get_hiralist)), 0)
+            joblib.dump(torch.LongTensor(label), ini["directory"]["dataset"]+"/label_data/%d"%(i), compress=3)
 
         print("     signal processing")
         filedirs = hoge.get_filedirs(ini["directory"]["raw_data"]+"/*")
@@ -92,9 +103,8 @@ class Preprocess():
 
         # padding
         dirs = hoge.get_filedirs(ini["directory"]["dataset"]+"/spectrogram/*")
-        dirs = sorted(dirs)
-        for i,directory in enumerate(dirs):
+        for directory in dirs:
             spectrogram = joblib.load(directory)
             diff = max_len - spectrogram.shape[0]
             spectrogram = np.concatenate((spectrogram, np.zeros((diff, spectrogram.shape[1]))), 0)
-            joblib.dump(spectrogram, ini["directory"]["dataset"]+"/spectrogram/%d"%(filenum), compress=3)
+            joblib.dump(torch.Tensor(spectrogram), directory, compress=3)

@@ -10,5 +10,7 @@ ini.read("./config.ini")
 if is_preprocess:
     pp.Preprocess()
 
-tacorron = models.Tacotron()
+tacotron = models.Tacotron()
 
+for i in range(1, int(ini["hyperparameter"]["epoch_num"])+1):
+    tacotron.train(i)

@@ -6,6 +6,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import shutil
 
+def try_gpu(obj):
+    import torch
+    if torch.cuda.is_available():
+        return obj.cuda()
+    return obj
+
 def methods(obj):
     for method in dir(obj):
         print(method)
