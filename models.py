@@ -23,7 +23,7 @@ class EncoderCBHG(nn.Module):
                                     for filter_size in encoder_filter_set])
         self.pool = nn.MaxPool1d(2, stride=1, padding=0)
         self.conv = nn.Conv1d(128, 128, 3, stride=1, padding=0)
-        self.highway = highway_net(128, 4, self.relu)
+        self.highway = Highway_net(128, 4, self.relu)
         self.gru = nn.GRU(128, 128, 1, batch_first=True, bidirectional=True)
         self.batchnorm = nn.BatchNorm1d(128)
 
@@ -43,7 +43,7 @@ class EncoderCBHG(nn.Module):
         x = self.batchnorm(x)
         x = self.highway(x.permute(0, 2, 1))
         x, h = self.gru(x)
-        return h.permute(1, 0, 2)
+        return x
 
 
 class DecoderCBHG(nn.Module):
@@ -61,12 +61,12 @@ class DecoderCBHG(nn.Module):
         self.conv1 = nn.Conv1d(1, 1, 3, stride=1, padding=0)
         self.conv2 = nn.Conv1d(1, 1, 3, stride=1, padding=0)
 
-        self.highway = highway_net(128, 4, self.relu)
+        self.highway = Highway_net(128, 4, self.relu)
         self.gru = nn.GRU(128, 128, 1, batch_first=True, bidirectional=True) # ワンチャン自分でgruの実装
 
-class highway_net(nn.Module):
+class Highway_net(nn.Module):
     def __init__(self, size, num_layers, f):
-        super(highway_net, self).__init__()
+        super(Highway_net, self).__init__()
         self.num_layers = num_layers
         self.nonlinear = nn.ModuleList([nn.Linear(size, size) for _ in range(num_layers)])
         self.linear = nn.ModuleList([nn.Linear(size, size) for _ in range(num_layers)])
@@ -81,6 +81,21 @@ class highway_net(nn.Module):
             linear = self.linear[layer](x)
             x = gate * nonlinear + (1 - gate) * linear
         return x
+
+class Attention(nn.Module):
+    def __init__(self):
+        super(Attention, self).__init__()
+        self.w1 = nn.Linear(256, 256)
+        self.w2 = nn.Linear(256, 256)
+        self.tanh = nn.Tanh()
+        self.softmax = nn.Softmax(dim=2)
+
+    def forward(self, h, d):
+        d = d.expand(-1, h.shape[1], -1) # batch_size*1*128 =>
+        u = self.tanh(self.w1(h)+self.w2(d))
+        a = self.softmax(u)
+        d = torch.sum(torch.mul(a, h), 1)
+        return d
 
 class Encoder(nn.Module):
     def __init__(self):
@@ -99,6 +114,7 @@ class Encoder(nn.Module):
         x = self.relu(self.fc2(x))
         x = self.dropout(x)
         x = self.cbhg(x)
+        return x
 
 
 # residual機能を使う
@@ -111,7 +127,20 @@ class Decoder(nn.Module):
         self.fc1 = nn.Linear(256, 256)
         self.fc2 = nn.Linear(256, 128)
         self.dropout = nn.Dropout(0.5)
+        self.rnn = nn.GRU(256, 256, 2, batch_first=True, bidirectional=True)
+        self.attention = Attention()
+        self.attention_rnn = nn.GRU(256, 256, 1, batch_first=True)
         self.relu = nn.ReLU()
+
+    def forward(self, representation):
+        mini_batch_num = int(ini["hyperparameter"]["batch_size"])
+        x = hoge.try_gpu(torch.zeros(mini_batch_num, 1, 256)) # <GO>
+        x, h = self.attention_rnn(x)
+        a = self.attention(representation, x)
+
+        x = self.relu(self.fc1(x))
+        x = self.relu(self.fc2(x))
+
 
 # griffin limは振幅スペクトルから位相スペクトルを再現する手法
 # griffin limは古いものなので, waveRNNなどを使ったほうがいい結果になることもありけり。らしい
@@ -167,7 +196,10 @@ class Tacotron():
                 self.d_opt.zero_grad()
 
                 labels, datas = self.get_minibatch(args)
-                self.encoder(labels, datas)
+                labels = hoge.try_gpu(labels)
+                datas = hoge.try_gpu(datas)
+                representation = self.encoder(labels, datas)
+                self.decoder(representation)
 
                 self.d_opt.step()
                 self.e_opt.step()
@@ -185,6 +217,7 @@ class Tacotron():
                 self.decoder.eval()
 
                 labels, datas = self.get_minibatch(args)
+                labels = hoge.try_gpu(lables)
 
                 loss_sum, cluster_loss, node_loss, exist_loss,\
                 c_correct, n_correct, e_correct = self.build_target(args, train=False)
