@@ -7,6 +7,7 @@ import configparser
 import glob
 import random
 import joblib
+import matplotlib.pyplot as plt
 
 ja = language.Ja()
 ini = configparser.ConfigParser()
@@ -150,7 +151,7 @@ class Decoder(nn.Module):
         self.r = int(ini["modelparameter"]["r"])
         self.batch_size = int(ini["hyperparameter"]["batch_size"])
         self.shrink = nn.Linear(256, 128)
-        self.expand = nn.Linear(128, 2048)
+        self.expand = nn.Linear(256, 2048)
 
     def forward(self, representation, spectrogram_len):
         x = hoge.try_gpu(torch.zeros(self.batch_size, 1, 256)) # <GO>
@@ -160,7 +161,7 @@ class Decoder(nn.Module):
         # try 1layer
         x, decoder_h = self.rnn(x, decoder_h)
         y = x
-        for _ in range(spectrogram_len):
+        for _ in range(spectrogram_len-1):
             x = self.relu(self.fc1(x))
             x = self.relu(self.fc2(x))
             a = self.shrink(a).view(self.batch_size, 1, 128)
@@ -170,7 +171,9 @@ class Decoder(nn.Module):
             a = self.attention(representation, x)
             x, decoder_h = self.rnn(x, decoder_h)
             y = torch.cat((y, x), 1)
+        print(y.shape)
         y = self.cbhg(y)
+        print(y.shape)
         y = self.expand(y)
         return y
 
@@ -200,6 +203,11 @@ class Tacotron():
 
         self.min_valid_loss = 10000000
 
+        self.loss = nn.L1Loss()
+
+        self.train_loss_transition = []
+        self.valid_loss_transition = []
+
     def train(self, epoch):
         print("epoch[%d/%s]:"%(epoch, ini["hyperparameter"]["epoch_num"]))
 
@@ -210,6 +218,8 @@ class Tacotron():
         display_step = 1000
         display_step_times = 1
         train_iter_max = (data_num/mini_batch_num) * (1-valid_rate)
+        train_loss_total = 0
+        valid_loss_total = 0
 
         # args of minibatch
         tmp = list(range(len(dirs)))
@@ -231,35 +241,34 @@ class Tacotron():
                 labels = hoge.try_gpu(labels)
                 datas = hoge.try_gpu(datas)
                 representation = self.encoder(labels, datas)
-                self.decoder(representation, datas.shape[1])
+                predicted = self.decoder(representation, datas.shape[1])
+
+                print(datas.shape, predicted.shape)
+                loss = self.loss(datas, predicted)
+                loss.backward()
 
                 self.d_opt.step()
                 self.e_opt.step()
+                train_loss_total += loss.item()
 
-                c_correct_total.append(c_correct)
-                n_correct_total.append(n_correct)
-                e_correct_total.append(e_correct)
-
-                clabel_loss_total.append(cluster_loss/mini_batch_num)
-                nlabel_loss_total.append(node_loss/mini_batch_num)
-                e_loss_total.append(exist_loss/mini_batch_num)
             else:
                 print("      valid iter[%d/%d]"%(repeat-train_iter_max+1, int(data_num//mini_batch_num*valid_rate+1)))
                 self.encoder.eval()
                 self.decoder.eval()
+                self.e_opt.zero_grad()
+                self.d_opt.zero_grad()
 
                 labels, datas = self.get_minibatch(args)
-                labels = hoge.try_gpu(lables)
+                labels = hoge.try_gpu(labels)
+                datas = hoge.try_gpu(datas)
+                representation = self.encoder(labels, datas)
+                predicted = self.decoder(representation, datas.shape[1])
 
-                loss_sum, cluster_loss, node_loss, exist_loss,\
-                c_correct, n_correct, e_correct = self.build_target(args, train=False)
-                clabel_valid_acc.append(c_correct)
-                nlabel_valid_acc.append(n_correct)
-                exist_valid_acc.append(e_correct)
+                loss = self.loss(datas, predicted)
+                valid_loss_total += loss.item()
 
-                clabel_valid_loss_total.append(cluster_loss/mini_batch_num)
-                nlabel_valid_loss_total.append(node_loss/mini_batch_num)
-                e_valid_loss_total.append(exist_loss/mini_batch_num)
+        self.train_loss_transition.append(train_loss_total)
+        self.valid_loss_transition.append(valid_loss_total)
 
         # 毎epochに重みを書き出す
         if self.min_valid_loss>valid_loss_total:
@@ -279,3 +288,14 @@ class Tacotron():
                 datas = torch.cat((datas, data), 0)
                 labels = torch.cat((labels, label), 0)
         return labels, datas
+
+    # 学習曲線など
+    def output(self, epoch):
+        plt.figure()
+        plt.xlabel("epochs")
+        plt.ylabel("loss")
+        plt.plot(range(epoch), self.train_loss_transition, label = "train loss")
+        plt.plot(range(epoch), self.valid_loss_transition, label = "valid loss")
+        plt.legend()
+        plt.savefig("train_result/loss_transition.png")
+        plt.close()
