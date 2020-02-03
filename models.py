@@ -53,16 +53,34 @@ class DecoderCBHG(nn.Module):
         decoder_filter_set = list(range(1, decoder_filter+1))
 
         self.relu = nn.ReLU()
-        # errorが出たらmodule dictに変更する予定
-        # inputなどを加味して後で全てのconvにpoolを追加
-        self.convs = nn.ModuleList([nn.Conv1d(1, 1, filter_size, stride=1, padding=0)\
+        self.convs = nn.ModuleList([nn.Conv1d(256, 128, filter_size, stride=1, padding=0)\
                                     for filter_size in decoder_filter_set])
-        # 256, 80になるように調整
-        self.conv1 = nn.Conv1d(1, 1, 3, stride=1, padding=0)
-        self.conv2 = nn.Conv1d(1, 1, 3, stride=1, padding=0)
+        self.pool = nn.MaxPool1d(2, stride=1, padding=0)
+        self.conv1 = nn.Conv1d(128, 256, 3, stride=1, padding=0)
+        self.conv2 = nn.Conv1d(256, 128, 3, stride=1, padding=0)
 
         self.highway = Highway_net(128, 4, self.relu)
         self.gru = nn.GRU(128, 128, 1, batch_first=True, bidirectional=True) # ワンチャン自分でgruの実装
+        self.batchnorm = nn.BatchNorm1d(128)
+
+    def forward(self, x):
+        stacks = torch.Tensor()
+        x = x.permute(0, 2, 1)
+        for i in range(len(self.convs)):
+            tmp = self.relu(self.convs[i](x))
+            tmp = self.batchnorm(tmp)
+            if i == 0:
+                stacks = tmp
+            else:
+                stacks = torch.cat((stacks,tmp), 2)
+        x = stacks
+        x = self.pool(x)
+        x = self.relu(self.conv1(x))
+        x = self.conv2(x)
+        x = self.batchnorm(x)
+        x = self.highway(x.permute(0, 2, 1))
+        x, h = self.gru(x)
+        return x
 
 class Highway_net(nn.Module):
     def __init__(self, size, num_layers, f):
@@ -117,8 +135,6 @@ class Encoder(nn.Module):
         return x
 
 
-# residual機能を使う
-# all-zeroを最初のフレームとして用いる
 class Decoder(nn.Module):
     def __init__(self):
         super(Decoder, self).__init__()
@@ -127,20 +143,36 @@ class Decoder(nn.Module):
         self.fc1 = nn.Linear(256, 256)
         self.fc2 = nn.Linear(256, 128)
         self.dropout = nn.Dropout(0.5)
-        self.rnn = nn.GRU(256, 256, 2, batch_first=True, bidirectional=True)
+        self.rnn = nn.GRU(256, 256, 1, batch_first=True)
         self.attention = Attention()
         self.attention_rnn = nn.GRU(256, 256, 1, batch_first=True)
         self.relu = nn.ReLU()
+        self.r = int(ini["modelparameter"]["r"])
+        self.batch_size = int(ini["hyperparameter"]["batch_size"])
+        self.shrink = nn.Linear(256, 128)
+        self.expand = nn.Linear(128, 2048)
 
-    def forward(self, representation):
-        mini_batch_num = int(ini["hyperparameter"]["batch_size"])
-        x = hoge.try_gpu(torch.zeros(mini_batch_num, 1, 256)) # <GO>
-        x, h = self.attention_rnn(x)
+    def forward(self, representation, spectrogram_len):
+        x = hoge.try_gpu(torch.zeros(self.batch_size, 1, 256)) # <GO>
+        x, attention_h = self.attention_rnn(x)
         a = self.attention(representation, x)
+        decoder_h = a.view(1, self.batch_size, 256)
+        # try 1layer
+        x, decoder_h = self.rnn(x, decoder_h)
+        y = x
+        for _ in range(spectrogram_len):
+            x = self.relu(self.fc1(x))
+            x = self.relu(self.fc2(x))
+            a = self.shrink(a).view(self.batch_size, 1, 128)
+            x = torch.cat((x, a), 2)
 
-        x = self.relu(self.fc1(x))
-        x = self.relu(self.fc2(x))
-
+            x, attention_h = self.attention_rnn(x)
+            a = self.attention(representation, x)
+            x, decoder_h = self.rnn(x, decoder_h)
+            y = torch.cat((y, x), 1)
+        y = self.cbhg(y)
+        y = self.expand(y)
+        return y
 
 # griffin limは振幅スペクトルから位相スペクトルを再現する手法
 # griffin limは古いものなので, waveRNNなどを使ったほうがいい結果になることもありけり。らしい
@@ -199,7 +231,7 @@ class Tacotron():
                 labels = hoge.try_gpu(labels)
                 datas = hoge.try_gpu(datas)
                 representation = self.encoder(labels, datas)
-                self.decoder(representation)
+                self.decoder(representation, datas.shape[1])
 
                 self.d_opt.step()
                 self.e_opt.step()
