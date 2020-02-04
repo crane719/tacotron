@@ -8,6 +8,8 @@ import glob
 import random
 import joblib
 import matplotlib.pyplot as plt
+from scipy.signal import istft
+import soundfile as sf
 
 ja = language.Ja()
 ini = configparser.ConfigParser()
@@ -130,7 +132,7 @@ class Encoder(nn.Module):
         self.dropout = nn.Dropout(0.5)
         self.relu = nn.ReLU()
 
-    def forward(self, labels, datas):
+    def forward(self, labels):
         x = self.emb(labels)
         x = self.relu(self.fc1(x))
         x = self.dropout(x)
@@ -179,19 +181,6 @@ class Decoder(nn.Module):
         y = self.expand(y)
         return y
 
-# griffin limは振幅スペクトルから位相スペクトルを再現する手法
-# griffin limは古いものなので, waveRNNなどを使ったほうがいい結果になることもありけり。らしい
-# 参照 https://www.jstage.jst.go.jp/article/jasj/72/12/72_764/_pdf
-
-# https://qiita.com/KSRG_Miyabi/items/2a3b5bdca464ec1154d7
-# スペクトル絶対値Aを適当な位相Nで初期化しXを作る。　( X = A * N )
-# ① x = IFT(X)
-# ② X = FT(x)
-# ③ X = A * X / |X|
-# ①～③を適当な数(50~100回？)だけ繰り返す。
-# paper曰く今回は50(なお30でも充分らしい)
-
-# わんちゃんこれか? https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.istft.html
 class Tacotron():
     def __init__(self):
         self.encoder = Encoder()
@@ -212,7 +201,6 @@ class Tacotron():
 
     def train(self, epoch):
         print("epoch[%d/%s]:"%(epoch, ini["hyperparameter"]["epoch_num"]))
-
         dirs = glob.glob(ini["directory"]["dataset"]+"/spectrogram/*")
         data_num = len(dirs)
         mini_batch_num = int(ini["hyperparameter"]["batch_size"])
@@ -233,7 +221,8 @@ class Tacotron():
             if repeat < train_iter_max:
                 if len(args) != mini_batch_num:
                     break
-                print("      train iter[%d/%d]"%(repeat, train_iter_max-1))
+                if repeat%10==0:
+                    print("      train iter[%d/%d]"%(repeat, train_iter_max-1))
                 self.encoder.train()
                 self.decoder.train()
                 self.e_opt.zero_grad()
@@ -242,28 +231,28 @@ class Tacotron():
                 labels, datas = self.get_minibatch(args)
                 labels = hoge.try_gpu(labels)
                 datas = hoge.try_gpu(datas)
-                representation = self.encoder(labels, datas)
+                representation = self.encoder(labels)
                 predicted = self.decoder(representation, datas.shape[1])
 
-                print(datas.shape, predicted.shape)
                 loss = self.loss(datas, predicted)
                 loss.backward()
 
                 self.d_opt.step()
                 self.e_opt.step()
                 train_loss_total += loss.item()
+                if repeat%10==0:
+                    print("             loss: %.3f"%(loss.item()*1000))
 
             else:
-                print("      valid iter[%d/%d]"%(repeat-train_iter_max+1, int(data_num//mini_batch_num*valid_rate+1)))
+                if repeat%10==0:
+                    print("      valid iter[%d/%d]"%(repeat-train_iter_max+1, int(data_num//mini_batch_num*valid_rate+1)))
                 self.encoder.eval()
                 self.decoder.eval()
-                self.e_opt.zero_grad()
-                self.d_opt.zero_grad()
 
                 labels, datas = self.get_minibatch(args)
                 labels = hoge.try_gpu(labels)
                 datas = hoge.try_gpu(datas)
-                representation = self.encoder(labels, datas)
+                representation = self.encoder(labels)
                 predicted = self.decoder(representation, datas.shape[1])
 
                 loss = self.loss(datas, predicted)
@@ -272,11 +261,54 @@ class Tacotron():
         self.train_loss_transition.append(train_loss_total)
         self.valid_loss_transition.append(valid_loss_total)
 
-        # 毎epochに重みを書き出す
         if self.min_valid_loss>valid_loss_total:
             self.min_valid_loss = valid_loss_total
-            torch.save(self.decoder.state_dict(), d_weight_dir)
-            torch.save(self.encoder.state_dict(), e_weight_dir)
+            torch.save(self.decoder.state_dict(), "param/dweight")
+            torch.save(self.encoder.state_dict(), "param/eweight")
+
+    def evaluate(self, epoch):
+        dirs = glob.glob(ini["directory"]["dataset"]+"/spectrogram/*")
+        data_num = len(dirs)
+        mini_batch_num = int(ini["hyperparameter"]["batch_size"])
+        valid_rate = float(ini["hyperparameter"]["valid_rate"])
+        sampling_rate = int(ini["signal"]["samplingrate"])
+        display_step = 1000
+        display_step_times = 1
+        train_loss_total = 0
+        valid_loss_total = 0
+
+        # args of minibatch
+        tmp = list(range(len(dirs)))
+        sample = random.sample(tmp, mini_batch_num)
+
+        self.encoder.eval()
+        self.decoder.eval()
+
+        labels, datas = self.get_minibatch(sample)
+        labels = hoge.try_gpu(labels)
+        datas = hoge.try_gpu(datas)
+
+        representation = self.encoder(labels)
+        predicted = self.decoder(representation, datas.shape[1])
+
+        for i, (correct_arg, predict) in enumerate(zip(sample, predicted)):
+            if i==3:
+                break
+            correct = joblib.load(ini["directory"]["dataset"]+"/waveform_data/%d"%(correct_arg))
+            plt.figure()
+            plt.plot(range(len(correct)), correct)
+            plt.savefig("train_result/%d_%d_correct.png"%(epoch, correct_arg))
+            plt.close()
+
+            predict = predict.cpu().detach().numpy()
+            predict = istft(predict)
+
+            plt.figure()
+            plt.plot(predict[0], predict[1])
+            plt.savefig("train_result/%d_%d_predict.png"%(epoch, correct_arg))
+            plt.close()
+
+            sf.write('train_result/%d_%d_predict.wav'%(epoch, correct_arg), predict[1], sampling_rate)
 
     def get_minibatch(self, args):
         for i, arg in enumerate(args):
@@ -291,7 +323,6 @@ class Tacotron():
                 labels = torch.cat((labels, label), 0)
         return labels, datas
 
-    # 学習曲線など
     def output(self, epoch):
         plt.figure()
         plt.xlabel("epochs")
