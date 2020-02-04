@@ -20,10 +20,10 @@ class EncoderCBHG(nn.Module):
         encoder_filter_set = list(range(1, encoder_filter+1))
 
         self.relu = nn.ReLU()
-        self.convs = nn.ModuleList([nn.Conv1d(128, 128, filter_size, stride=1, padding=0)\
+        self.convs = nn.ModuleList([nn.Conv1d(128, 128, filter_size, stride=1, padding=filter_size//2)\
                                     for filter_size in encoder_filter_set])
         self.pool = nn.MaxPool1d(2, stride=1, padding=0)
-        self.conv = nn.Conv1d(128, 128, 3, stride=1, padding=0)
+        self.conv = nn.Conv1d(2048, 128, 3, stride=1, padding=0)
         self.highway = Highway_net(128, 4, self.relu)
         self.gru = nn.GRU(128, 128, 1, batch_first=True, bidirectional=True)
         self.batchnorm = nn.BatchNorm1d(128)
@@ -31,15 +31,16 @@ class EncoderCBHG(nn.Module):
     def forward(self, x):
         stacks = torch.Tensor()
         x = x.permute(0, 2, 1)
+        T = x.shape[-1]
         for i in range(len(self.convs)):
             tmp = self.relu(self.convs[i](x))
-            tmp = self.batchnorm(tmp)
+            tmp = self.batchnorm(tmp)[:, :, :T]
             if i == 0:
                 stacks = tmp
             else:
-                stacks = torch.cat((stacks,tmp), 2)
+                stacks = torch.cat((stacks, tmp), 1)
         x = stacks
-        x = self.pool(x)
+        x = self.pool(x)[:, :, :T]
         x = self.relu(self.conv(x))
         x = self.batchnorm(x)
         x = self.highway(x.permute(0, 2, 1))
@@ -54,31 +55,34 @@ class DecoderCBHG(nn.Module):
         decoder_filter_set = list(range(1, decoder_filter+1))
 
         self.relu = nn.ReLU()
-        self.convs = nn.ModuleList([nn.Conv1d(256, 128, filter_size, stride=1, padding=0)\
+        self.convs = nn.ModuleList([nn.Conv1d(256, 128, filter_size, stride=1, padding=filter_size//2)\
                                     for filter_size in decoder_filter_set])
-        self.pool = nn.MaxPool1d(2, stride=1, padding=0)
-        self.conv1 = nn.Conv1d(128, 256, 3, stride=1, padding=0)
-        self.conv2 = nn.Conv1d(256, 128, 3, stride=1, padding=0)
+        self.pool = nn.MaxPool1d(2, stride=1, padding=1)
+        self.conv1 = nn.Conv1d(1024, 256, 3, stride=1, padding=1)
+        self.conv2 = nn.Conv1d(256, 128, 3, stride=1, padding=1)
 
         self.highway = Highway_net(128, 4, self.relu)
         self.gru = nn.GRU(128, 128, 1, batch_first=True, bidirectional=True) # ワンチャン自分でgruの実装
-        self.batchnorm = nn.BatchNorm1d(128)
+        self.batchnorm1 = nn.BatchNorm1d(128)
+        self.batchnorm2 = nn.BatchNorm1d(256)
 
     def forward(self, x):
         stacks = torch.Tensor()
         x = x.permute(0, 2, 1)
+        T = x.shape[-1]
         for i in range(len(self.convs)):
             tmp = self.relu(self.convs[i](x))
-            tmp = self.batchnorm(tmp)
+            tmp = self.batchnorm1(tmp)[:, :, :T]
             if i == 0:
                 stacks = tmp
             else:
-                stacks = torch.cat((stacks,tmp), 2)
+                stacks = torch.cat((stacks, tmp), 1)
         x = stacks
-        x = self.pool(x)
+        x = self.pool(x)[:, :, :T]
         x = self.relu(self.conv1(x))
+        x = self.batchnorm2(x)
         x = self.conv2(x)
-        x = self.batchnorm(x)
+        x = self.batchnorm1(x)
         x = self.highway(x.permute(0, 2, 1))
         x, h = self.gru(x)
         return x
@@ -171,9 +175,7 @@ class Decoder(nn.Module):
             a = self.attention(representation, x)
             x, decoder_h = self.rnn(x, decoder_h)
             y = torch.cat((y, x), 1)
-        print(y.shape)
         y = self.cbhg(y)
-        print(y.shape)
         y = self.expand(y)
         return y
 
