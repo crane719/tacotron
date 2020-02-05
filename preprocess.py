@@ -9,6 +9,7 @@ from scipy.fftpack import fft, fftshift
 import math
 import torch
 from torch.utils.data import TensorDataset, DataLoader
+import librosa
 
 class Preprocess():
     def __init__(self):
@@ -20,6 +21,7 @@ class Preprocess():
         required = [ini["directory"]["dataset"],
                     ini["directory"]["dataset"]+"/label_data",
                     ini["directory"]["dataset"]+"/spectrogram",
+                    ini["directory"]["dataset"]+"/melspectrogram",
                     ini["directory"]["dataset"]+"/waveform_data"]
         boolean = [hoge.is_dir_existed(dir) for dir in required]
         for tf, directory in zip(boolean, required):
@@ -68,6 +70,8 @@ class Preprocess():
         filedirs = hoge.get_filedirs(ini["directory"]["raw_data"]+"/*")
         max_len = 0
         max_value = 0
+        max_mel_len = 0
+        max_mel_value = 0
         for filenum, filedir in enumerate(filedirs):
             if (filenum+1)%100==0:
                 print("     [%d/%d]"%(filenum, len(filedirs)))
@@ -82,8 +86,7 @@ class Preprocess():
             window_shift = int(ini["signal"]["window_shift"])
             window_size = int(ini["signal"]["window_size"])
             fft_point = int(ini["signal"]["fft_point"])
-            if ini["signal"]["window"] == "Hann":
-                window = signal.hann(window_size)
+            if ini["signal"]["window"] == "Hann": window = signal.hann(window_size)
             # window
             renew_data = np.zeros(len(data))
             for j in range(0, len(data), window_shift):
@@ -105,7 +108,17 @@ class Preprocess():
                 max_value = tmp_max_value
             joblib.dump(spectrogram, ini["directory"]["dataset"]+"/spectrogram/%d"%(filenum), compress=3)
 
-        # padding and normalization
+            # melspectrogram
+            mel_spectrogram = librosa.feature.melspectrogram(data,
+                                                             sr=int(ini["signal"]["samplingrate"]),
+                                                             n_mels=int(ini["signal"]["band"]))
+            joblib.dump(mel_spectrogram, ini["directory"]["dataset"]+"/melspectrogram/%d"%(filenum), compress=3)
+            if mel_spectrogram.shape[0] > max_mel_len:
+                max_mel_len = mel_spectrogram.shape[0]
+            if max(mel_spectrogram.reshape(-1)) > max_mel_value:
+                max_mel_value = max(mel_spectrogram.reshape(-1))
+
+        # spectrogram padding and normalization
         dirs = hoge.get_filedirs(ini["directory"]["dataset"]+"/spectrogram/*")
         for directory in dirs:
             spectrogram = joblib.load(directory)
@@ -113,3 +126,13 @@ class Preprocess():
             spectrogram = np.concatenate((spectrogram, np.zeros((diff, spectrogram.shape[1]))), 0)
             spectrogram /= max_value
             joblib.dump(torch.Tensor(spectrogram), directory, compress=3)
+
+        # melspectrogram padding and normalization
+        dirs = hoge.get_filedirs(ini["directory"]["dataset"]+"/melspectrogram/*")
+        for directory in dirs:
+            spectrogram = joblib.load(directory)
+            diff = mel_max_len - spectrogram.shape[0]
+            spectrogram = np.concatenate((spectrogram, np.zeros((diff, spectrogram.shape[1]))), 0)
+            spectrogram /= mel_max_value
+            joblib.dump(torch.Tensor(spectrogram), directory, compress=3)
+
