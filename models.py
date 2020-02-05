@@ -33,6 +33,7 @@ class EncoderCBHG(nn.Module):
     def forward(self, x):
         stacks = torch.Tensor()
         x = x.permute(0, 2, 1)
+        input_origin = x
         T = x.shape[-1]
         for i in range(len(self.convs)):
             tmp = self.relu(self.convs[i](x))
@@ -45,6 +46,7 @@ class EncoderCBHG(nn.Module):
         x = self.pool(x)[:, :, :T]
         x = self.relu(self.conv(x))
         x = self.batchnorm(x)
+        x += self.relu(input_origin) # residual
         x = self.highway(x.permute(0, 2, 1))
         x, h = self.gru(x)
         return x
@@ -71,6 +73,7 @@ class DecoderCBHG(nn.Module):
     def forward(self, x):
         stacks = torch.Tensor()
         x = x.permute(0, 2, 1)
+        input_origin = x
         T = x.shape[-1]
         for i in range(len(self.convs)):
             tmp = self.relu(self.convs[i](x))
@@ -85,6 +88,7 @@ class DecoderCBHG(nn.Module):
         x = self.batchnorm2(x)
         x = self.conv2(x)
         x = self.batchnorm1(x)
+        x += self.relu(input_origin) # residual
         x = self.highway(x.permute(0, 2, 1))
         x, h = self.gru(x)
         return x
