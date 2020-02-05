@@ -67,6 +67,7 @@ class Preprocess():
         print("     signal processing")
         filedirs = hoge.get_filedirs(ini["directory"]["raw_data"]+"/*")
         max_len = 0
+        max_value = 0
         for filenum, filedir in enumerate(filedirs):
             if (filenum+1)%100==0:
                 print("     [%d/%d]"%(filenum, len(filedirs)))
@@ -99,12 +100,16 @@ class Preprocess():
             spectrogram = np.array(spectrogram)
             if spectrogram.shape[0] > max_len:
                 max_len = spectrogram.shape[0]
+            tmp_max_value = torch.max(spectrogram.view(-1))[0]
+            if tmp_max_value > max_value:
+                max_value = tmp_max_value
             joblib.dump(spectrogram, ini["directory"]["dataset"]+"/spectrogram/%d"%(filenum), compress=3)
 
-        # padding
+        # padding and normalization
         dirs = hoge.get_filedirs(ini["directory"]["dataset"]+"/spectrogram/*")
         for directory in dirs:
             spectrogram = joblib.load(directory)
             diff = max_len - spectrogram.shape[0]
             spectrogram = np.concatenate((spectrogram, np.zeros((diff, spectrogram.shape[1]))), 0)
+            spectrogram /= max_value
             joblib.dump(torch.Tensor(spectrogram), directory, compress=3)
