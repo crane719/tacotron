@@ -3,4 +3,7 @@
 .DS_Store
 /__pycache__/*
 /train_result/*
-
+._*.*
+/param/*
+/venv/*
+log
