@@ -10,6 +10,7 @@ import joblib
 import matplotlib.pyplot as plt
 from scipy.signal import istft
 import soundfile as sf
+import numpy as np
 
 ja = language.Ja()
 ini = configparser.ConfigParser()
@@ -24,8 +25,9 @@ class EncoderCBHG(nn.Module):
         self.relu = nn.ReLU()
         self.convs = nn.ModuleList([nn.Conv1d(128, 128, filter_size, stride=1, padding=filter_size//2)\
                                     for filter_size in encoder_filter_set])
-        self.pool = nn.MaxPool1d(2, stride=1, padding=0)
-        self.conv = nn.Conv1d(2048, 128, 3, stride=1, padding=0)
+        self.pool = nn.MaxPool1d(2, stride=1, padding=1)
+        self.conv1 = nn.Conv1d(2048, 128, 3, stride=1, padding=1)
+        self.conv2 = nn.Conv1d(128, 128, 3, stride=1, padding=1)
         self.highway = Highway_net(128, 4, self.relu)
         self.gru = nn.GRU(128, 128, 1, batch_first=True, bidirectional=True)
         self.batchnorm = nn.BatchNorm1d(128)
@@ -44,9 +46,11 @@ class EncoderCBHG(nn.Module):
                 stacks = torch.cat((stacks, tmp), 1)
         x = stacks
         x = self.pool(x)[:, :, :T]
-        x = self.relu(self.conv(x))
+        x = self.relu(self.conv1(x))
         x = self.batchnorm(x)
-        x += self.relu(input_origin) # residual
+        x = self.conv2(x)
+        x = self.batchnorm(x)
+        x = x + input_origin # residual
         x = self.highway(x.permute(0, 2, 1))
         x, h = self.gru(x)
         return x
@@ -59,16 +63,17 @@ class DecoderCBHG(nn.Module):
         decoder_filter_set = list(range(1, decoder_filter+1))
 
         self.relu = nn.ReLU()
-        self.convs = nn.ModuleList([nn.Conv1d(256, 128, filter_size, stride=1, padding=filter_size//2)\
+        self.convs = nn.ModuleList([nn.Conv1d(80, 128, filter_size, stride=1, padding=filter_size//2)\
                                     for filter_size in decoder_filter_set])
         self.pool = nn.MaxPool1d(2, stride=1, padding=1)
         self.conv1 = nn.Conv1d(1024, 256, 3, stride=1, padding=1)
-        self.conv2 = nn.Conv1d(256, 128, 3, stride=1, padding=1)
+        self.conv2 = nn.Conv1d(256, 80, 3, stride=1, padding=1)
 
-        self.highway = Highway_net(128, 4, self.relu)
-        self.gru = nn.GRU(128, 128, 1, batch_first=True, bidirectional=True) # ワンチャン自分でgruの実装
+        self.highway = Highway_net(80, 4, self.relu)
+        self.gru = nn.GRU(80, 80, 1, batch_first=True, bidirectional=True)
         self.batchnorm1 = nn.BatchNorm1d(128)
         self.batchnorm2 = nn.BatchNorm1d(256)
+        self.batchnorm3 = nn.BatchNorm1d(80)
 
     def forward(self, x):
         stacks = torch.Tensor()
@@ -87,10 +92,23 @@ class DecoderCBHG(nn.Module):
         x = self.relu(self.conv1(x))
         x = self.batchnorm2(x)
         x = self.conv2(x)
-        x = self.batchnorm1(x)
-        x += self.relu(input_origin) # residual
+        x = self.batchnorm3(x)
+        x = x + input_origin # residual
         x = self.highway(x.permute(0, 2, 1))
         x, h = self.gru(x)
+        return x
+
+class Prenet(nn.Module):
+    def __init__(self):
+        super(Prenet, self).__init__()
+        self.fc1 = nn.Linear(256, 256)
+        self.fc2 = nn.Linear(256, 128)
+        self.dropout = nn.Dropout(0.5)
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        x = self.dropout(self.relu(self.fc1(x)))
+        x = self.dropout(self.relu(self.fc2(x)))
         return x
 
 class Highway_net(nn.Module):
@@ -116,74 +134,86 @@ class Attention(nn.Module):
         super(Attention, self).__init__()
         self.w1 = nn.Linear(256, 256)
         self.w2 = nn.Linear(256, 256)
+        self.v = nn.Linear(256, 1)
         self.tanh = nn.Tanh()
-        self.softmax = nn.Softmax(dim=2)
+        self.softmax = nn.Softmax(dim=1)
 
     def forward(self, h, d):
         d = d.expand(-1, h.shape[1], -1) # batch_size*1*128 =>
-        u = self.tanh(self.w1(h)+self.w2(d))
+        u = self.v(self.tanh(self.w1(h)+self.w2(d)))
+        u = u.squeeze(-1)
         a = self.softmax(u)
-        d = torch.sum(torch.mul(a, h), 1)
-        return d
+        attention = torch.bmm(a.unsqueeze(1), h)
+        return attention
 
 class Encoder(nn.Module):
     def __init__(self):
         super(Encoder, self).__init__()
+        self.prenet = Prenet()
         self.cbhg = EncoderCBHG()
         self.emb = nn.Embedding(len(ja.get_hiralist)+1, 256, padding_idx = len(ja.get_hiralist))
-        self.fc1 = nn.Linear(256, 256)
-        self.fc2 = nn.Linear(256, 128)
-        self.dropout = nn.Dropout(0.5)
-        self.relu = nn.ReLU()
 
     def forward(self, labels):
         x = self.emb(labels)
-        x = self.relu(self.fc1(x))
-        x = self.dropout(x)
-        x = self.relu(self.fc2(x))
-        x = self.dropout(x)
+        x = self.prenet(x)
         x = self.cbhg(x)
         return x
-
 
 class Decoder(nn.Module):
     def __init__(self):
         super(Decoder, self).__init__()
+        self.batch_size = int(ini["hyperparameter"]["batch_size"])
+        self.r = int(ini["modelparameter"]["r"])
+
+        self.prenet = Prenet()
         self.cbhg = DecoderCBHG()
-        self.emb = nn.Embedding(len(ja.get_hiralist), 256, padding_idx=-1)
-        self.fc1 = nn.Linear(256, 256)
-        self.fc2 = nn.Linear(256, 128)
-        self.dropout = nn.Dropout(0.5)
-        self.rnn = nn.GRU(256, 256, 1, batch_first=True)
         self.attention = Attention()
         self.attention_rnn = nn.GRU(256, 256, 1, batch_first=True)
+        self.rnns = nn.ModuleList([nn.GRU(256, 256, batch_first=True) for _ in range(self.r)])
+        self.shrink = nn.Linear(256+128, 256)
+        self.mel = nn.Linear(256, 80)
+        self.linear = nn.Linear(160, 1025)
+
         self.relu = nn.ReLU()
-        self.r = int(ini["modelparameter"]["r"])
-        self.batch_size = int(ini["hyperparameter"]["batch_size"])
-        self.shrink = nn.Linear(256, 128)
-        self.expand = nn.Linear(256, 2048)
 
     def forward(self, representation, spectrogram_len):
+        # first step
         x = hoge.try_gpu(torch.zeros(self.batch_size, 1, 256)) # <GO>
+        a = hoge.try_gpu(torch.zeros(self.batch_size, 1, 256))
+        decoder_h = hoge.try_gpu(torch.zeros(1, self.batch_size, 256))
+
+        x = self.prenet(x)
+        x = self.shrink(torch.cat((x, a), 2))
+
         x, attention_h = self.attention_rnn(x)
         a = self.attention(representation, x)
-        decoder_h = a.view(1, self.batch_size, 256)
-        # try 1layer
-        x, decoder_h = self.rnn(x, decoder_h)
-        y = x
-        for _ in range(spectrogram_len-1):
-            x = self.relu(self.fc1(x))
-            x = self.relu(self.fc2(x))
-            a = self.shrink(a).view(self.batch_size, 1, 128)
-            x = torch.cat((x, a), 2)
+        #attention_h = torch.cat((attention_h, a.permute(1, 0, 2)), 2)
 
-            x, attention_h = self.attention_rnn(x)
+        decoder_hs = []
+        for i, rnn in enumerate(self.rnns):
+            x, decoder_h = rnn(x, decoder_h)
+            if i==0:
+                y = x
+            else:
+                y = torch.cat((y, x), 1)
+            decoder_hs.append(decoder_h)
+
+        for _ in range(int(np.floor((spectrogram_len-self.r)/self.r))):
+            x = self.prenet(x)
+            x = self.shrink(torch.cat((x, a), 2))
+
+            x, attention_h = self.attention_rnn(x, attention_h)
             a = self.attention(representation, x)
-            x, decoder_h = self.rnn(x, decoder_h)
-            y = torch.cat((y, x), 1)
-        y = self.cbhg(y)
-        y = self.expand(y)
-        return y
+            #attention_h = torch.cat((attention_h, a.permute(1, 0, 2)), 2)
+
+            for i, rnn in enumerate(self.rnns):
+                x, decoder_hs[i] = rnn(x, decoder_hs[i])
+                y = torch.cat((y, x), 1)
+
+        mel = self.mel(y)
+        y = self.cbhg(mel)
+        linear = self.linear(y)
+        return mel, linear
 
 class Tacotron():
     def __init__(self):
@@ -195,6 +225,9 @@ class Tacotron():
 
         self.d_opt = optim.Adam(self.decoder.parameters())
         self.e_opt = optim.Adam(self.encoder.parameters())
+
+        self.d_scheduler = optim.lr_scheduler.MultiStepLR(self.d_opt, milestones=[500e3, 1e6, 2e6], gamma=0.5)
+        self.e_scheduler = optim.lr_scheduler.MultiStepLR(self.e_opt, milestones=[500e3, 1e6, 2e6], gamma=0.5)
 
         self.min_valid_loss = 10000000
 
@@ -232,20 +265,29 @@ class Tacotron():
                 self.e_opt.zero_grad()
                 self.d_opt.zero_grad()
 
-                labels, datas = self.get_minibatch(args)
+                labels, linears, mels = self.get_minibatch(args)
                 labels = hoge.try_gpu(labels)
-                datas = hoge.try_gpu(datas)
-                representation = self.encoder(labels)
-                predicted = self.decoder(representation, datas.shape[1])
+                linears = hoge.try_gpu(linears)
+                mels = hoge.try_gpu(mels)
 
-                loss = self.loss(datas, predicted)
+                representation = self.encoder(labels)
+                pred_mels, pred_linears = self.decoder(representation, linears.shape[1])
+
+                length = min(mels.shape[1], pred_mels.shape[1])
+                mel_loss = self.loss(mels[:,:length,:], pred_mels[:,:length,:])
+                linear_loss = self.loss(linears[:,:length,:], pred_linears[:,:length,:])
+                loss = mel_loss + linear_loss
                 loss.backward()
 
                 self.d_opt.step()
                 self.e_opt.step()
-                train_loss_total += loss.item()
+                train_loss_total = train_loss_total + float(loss.item())
                 if repeat%10==0:
-                    print("             loss: %.3f"%(loss.item()*1000))
+                    print("                loss: %.3f"%(loss.item()*1000))
+                    print("            mel loss: %.3f"%(mel_loss.item()*1000))
+                    print("         linear loss: %.3f"%(linear_loss.item()*1000))
+                self.d_scheduler.step()
+                self.e_scheduler.step()
 
             else:
                 if repeat%10==0:
@@ -253,14 +295,17 @@ class Tacotron():
                 self.encoder.eval()
                 self.decoder.eval()
 
-                labels, datas = self.get_minibatch(args)
+                labels, linears, mels = self.get_minibatch(args)
                 labels = hoge.try_gpu(labels)
-                datas = hoge.try_gpu(datas)
+                linears = hoge.try_gpu(linears)
+                mels = hoge.try_gpu(mels)
                 representation = self.encoder(labels)
-                predicted = self.decoder(representation, datas.shape[1])
+                pred_mels, pred_linears = self.decoder(representation, linear.shape[1])
 
-                loss = self.loss(datas, predicted)
-                valid_loss_total += loss.item()
+                mel_loss = self.loss(mels, pred_mels)
+                linear_loss = self.loss(linears, pred_linears)
+                loss = mel_loss + linear_loss
+                valid_loss_total = valid_loss_total + float(loss.item())
 
         self.train_loss_transition.append(train_loss_total)
         self.valid_loss_transition.append(valid_loss_total)
@@ -288,44 +333,63 @@ class Tacotron():
         self.encoder.eval()
         self.decoder.eval()
 
-        labels, datas = self.get_minibatch(sample)
+        labels, linears, mels = self.get_minibatch(sample)
         labels = hoge.try_gpu(labels)
-        datas = hoge.try_gpu(datas)
+        linears = hoge.try_gpu(linears)
+        mels = hoge.try_gpu(mels)
 
         representation = self.encoder(labels)
-        predicted = self.decoder(representation, datas.shape[1])
+        pred_mels, pred_linears = self.decoder(representation, linear.shape[1])
 
         for i, (correct_arg, predict) in enumerate(zip(sample, predicted)):
             if i==3:
                 break
-            correct = joblib.load(ini["directory"]["dataset"]+"/waveform_data/%d"%(correct_arg))
+            correct = joblib.load(ini["directory"]["dataset"]+"/spectrogram/%d"%(correct_arg))
             plt.figure()
-            plt.plot(range(len(correct)), correct)
-            plt.savefig("train_result/%d_%d_correct.png"%(epoch, correct_arg))
+            plt.pcolormesh(correct)
+            plt.savefig("train_result/%d_%d_correct_line.png"%(epoch, correct_arg))
             plt.close()
 
-            predict = predict.cpu().detach().numpy()
-            predict = istft(predict)
+            predict = pred_linears[i].cpu().detach().numpy()
+            plt.figure()
+            plt.pcolormesh(predict)
+            plt.savefig("train_result/%d_%d_pred_line.png"%(epoch, correct_arg))
+            plt.close()
 
+            predict = istft(predict)
             plt.figure()
             plt.plot(predict[0], predict[1])
-            plt.savefig("train_result/%d_%d_predict.png"%(epoch, correct_arg))
+            plt.savefig("train_result/%d_%d_predict_wave.png"%(epoch, correct_arg))
             plt.close()
 
-            sf.write('train_result/%d_%d_predict.wav'%(epoch, correct_arg), predict[1], sampling_rate)
+            correct = joblib.load(ini["directory"]["dataset"]+"/melspectrogram/%d"%(correct_arg))
+            plt.figure()
+            plt.pcolormesh(correct)
+            plt.savefig("train_result/%d_%d_correct_mel.png"%(epoch, correct_arg))
+            plt.close()
+
+            predict = pred_mels[i].cpu().detach().numpy()
+            plt.figure()
+            plt.pcolormesh(predict)
+            plt.savefig("train_result/%d_%d_pred_mel.png"%(epoch, correct_arg))
+            plt.close()
 
     def get_minibatch(self, args):
         for i, arg in enumerate(args):
-            data = joblib.load(ini["directory"]["dataset"]+"/spectrogram/%d"%(i))
-            data = data.view([1]+list(data.shape))
+            spectrogram = joblib.load(ini["directory"]["dataset"]+"/spectrogram/%d"%(i))
+            spectrogram = spectrogram.view([1]+list(spectrogram.shape))
+            mel = joblib.load(ini["directory"]["dataset"]+"/melspectrogram/%d"%(i))
+            mel = mel.view([1]+list(mel.shape))
             label = joblib.load(ini["directory"]["dataset"]+"/label_data/%d"%(i)).view(1, -1)
             if i == 0:
-                datas = data
+                spectrograms = spectrogram
+                mels = mel
                 labels = label
             else:
-                datas = torch.cat((datas, data), 0)
+                spectrograms = torch.cat((spectrograms, spectrogram), 0)
+                mels = torch.cat((mels, mel), 0)
                 labels = torch.cat((labels, label), 0)
-        return labels, datas
+        return labels, spectrograms, mels
 
     def output(self, epoch):
         plt.figure()

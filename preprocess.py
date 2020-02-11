@@ -10,6 +10,7 @@ import math
 import torch
 from torch.utils.data import TensorDataset, DataLoader
 import librosa
+import scipy
 
 class Preprocess():
     def __init__(self):
@@ -86,6 +87,7 @@ class Preprocess():
             window_shift = int(ini["signal"]["window_shift"])
             window_size = int(ini["signal"]["window_size"])
             fft_point = int(ini["signal"]["fft_point"])
+            fs = int(ini["signal"]["samplingrate"])
             if ini["signal"]["window"] == "Hann": window = signal.hann(window_size)
             # window
             renew_data = np.zeros(len(data))
@@ -95,23 +97,37 @@ class Preprocess():
             diff = len(data)%fft_point
             tmp = np.abs(fft(renew_data)/(len(renew_data)/2))
             renew_data = np.concatenate((renew_data, np.zeros(diff)),0)
+            """
             spectrogram = []
             for j in range(fft_point, len(renew_data), fft_point):
                 tmp = renew_data[j-fft_point:j]
                 spectrum = np.abs(fft(tmp) / (len(tmp)/2.0))
                 spectrogram.append(spectrum)
             spectrogram = np.array(spectrogram)
+            """
+            f, t, spectrogram = scipy.signal.spectrogram(renew_data, fs=fs, nfft=fft_point)
+            spectrogram = spectrogram.T
+            joblib.dump(spectrogram, ini["directory"]["dataset"]+"/spectrogram/%d"%(filenum), compress=3)
             if spectrogram.shape[0] > max_len:
                 max_len = spectrogram.shape[0]
-            tmp_max_value = torch.max(spectrogram.view(-1))[0]
+            tmp_max_value = np.max(spectrogram.reshape(-1))
             if tmp_max_value > max_value:
                 max_value = tmp_max_value
+            """
+            import matplotlib.pyplot as plt
+            f, t, spectrogram = scipy.signal.spectrogram(renew_data, fs=fs, nfft=fft_point)
+            plt.pcolormesh(spectrogram*100000)
+            plt.savefig("spectrogram.png")
+            plt.close()
             joblib.dump(spectrogram, ini["directory"]["dataset"]+"/spectrogram/%d"%(filenum), compress=3)
+            """
 
             # melspectrogram
-            mel_spectrogram = librosa.feature.melspectrogram(data,
+            mel_spectrogram = librosa.feature.melspectrogram(renew_data,
+                                                             S=spectrogram.T,
                                                              sr=int(ini["signal"]["samplingrate"]),
                                                              n_mels=int(ini["signal"]["band"]))
+            mel_spectrogram = mel_spectrogram.T
             joblib.dump(mel_spectrogram, ini["directory"]["dataset"]+"/melspectrogram/%d"%(filenum), compress=3)
             if mel_spectrogram.shape[0] > max_mel_len:
                 max_mel_len = mel_spectrogram.shape[0]
@@ -131,8 +147,8 @@ class Preprocess():
         dirs = hoge.get_filedirs(ini["directory"]["dataset"]+"/melspectrogram/*")
         for directory in dirs:
             spectrogram = joblib.load(directory)
-            diff = mel_max_len - spectrogram.shape[0]
+            diff = max_mel_len - spectrogram.shape[0]
             spectrogram = np.concatenate((spectrogram, np.zeros((diff, spectrogram.shape[1]))), 0)
-            spectrogram /= mel_max_value
+            spectrogram /= max_mel_value
             joblib.dump(torch.Tensor(spectrogram), directory, compress=3)
 

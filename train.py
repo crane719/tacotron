@@ -22,10 +22,9 @@ if is_preprocess:
 tacotron = models.Tacotron()
 
 for epoch in range(1, int(ini["hyperparameter"]["epoch_num"])+1):
-    tacotron.evaluate(epoch)
     tacotron.train(epoch)
     tacotron.output(epoch)
 
-    if (epoch-1)%5 == 0:
+    if (epoch-1)%2== 0:
         tacotron.evaluate(epoch)
 
