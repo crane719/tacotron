@@ -3,7 +3,7 @@ import models
 import configparser
 import hoge
 
-is_preprocess = False
+is_preprocess = True
 
 ini = configparser.ConfigParser()
 ini.read("./config.ini")

@@ -97,6 +97,10 @@ class Preprocess():
             diff = len(data)%fft_point
             tmp = np.abs(fft(renew_data)/(len(renew_data)/2))
             renew_data = np.concatenate((renew_data, np.zeros(diff)),0)
+
+            # no voice cut
+            no_voice_args = list(np.where(np.abs(renew_data)<np.max(np.abs(renew_data))/1000))[0]
+            renew_data = np.delete(renew_data, no_voice_args)
             """
             spectrogram = []
             for j in range(fft_point, len(renew_data), fft_point):
