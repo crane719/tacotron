@@ -25,6 +25,6 @@ for epoch in range(1, int(ini["hyperparameter"]["epoch_num"])+1):
     tacotron.train(epoch)
     tacotron.output(epoch)
 
-    if (epoch-1)%2== 0:
-        tacotron.evaluate(epoch)
+    #if (epoch-1)%2== 0:
+    #    tacotron.evaluate(epoch)
 

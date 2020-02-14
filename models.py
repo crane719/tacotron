@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 from scipy.signal import istft
 import soundfile as sf
 import numpy as np
+import time
 
 ja = language.Ja()
 ini = configparser.ConfigParser()
@@ -38,16 +39,19 @@ class EncoderCBHG(nn.Module):
         input_origin = x
         T = x.shape[-1]
         for i in range(len(self.convs)):
-            tmp = self.relu(self.convs[i](x))
-            tmp = self.batchnorm(tmp)[:, :, :T]
+            tmp = self.convs[i](x)
+            tmp = self.batchnorm(tmp)
+            tmp = self.relu(tmp)
+            tmp = tmp[:, :, :T]
             if i == 0:
                 stacks = tmp
             else:
                 stacks = torch.cat((stacks, tmp), 1)
         x = stacks
         x = self.pool(x)[:, :, :T]
-        x = self.relu(self.conv1(x))
+        x = self.conv1(x)
         x = self.batchnorm(x)
+        x = self.relu(x)
         x = self.conv2(x)
         x = self.batchnorm(x)
         x = x + input_origin # residual
@@ -81,16 +85,19 @@ class DecoderCBHG(nn.Module):
         input_origin = x
         T = x.shape[-1]
         for i in range(len(self.convs)):
-            tmp = self.relu(self.convs[i](x))
-            tmp = self.batchnorm1(tmp)[:, :, :T]
+            tmp = self.convs[i](x)
+            tmp = self.batchnorm1(tmp)
+            tmp = self.relu(tmp)
+            tmp = tmp[:, :, :T]
             if i == 0:
                 stacks = tmp
             else:
                 stacks = torch.cat((stacks, tmp), 1)
         x = stacks
         x = self.pool(x)[:, :, :T]
-        x = self.relu(self.conv1(x))
+        x = self.conv1(x)
         x = self.batchnorm2(x)
+        x = self.relu(x)
         x = self.conv2(x)
         x = self.batchnorm3(x)
         x = x + input_origin # residual
@@ -175,6 +182,7 @@ class Decoder(nn.Module):
         self.linear = nn.Linear(160, 1025)
 
         self.relu = nn.ReLU()
+        self.sigmoid = nn.Sigmoid()
 
     def forward(self, representation, spectrogram_len):
         # first step
@@ -191,14 +199,20 @@ class Decoder(nn.Module):
 
         decoder_hs = []
         for i, rnn in enumerate(self.rnns):
+            origin = x
             x, decoder_h = rnn(x, decoder_h)
+            x = x + origin
+            """
             if i==0:
                 y = x
             else:
                 y = torch.cat((y, x), 1)
+            """
             decoder_hs.append(decoder_h)
+        y = x
 
-        for _ in range(int(np.floor((spectrogram_len-self.r)/self.r))):
+        #for _ in range(int(np.floor((spectrogram_len-self.r)/self.r))):
+        for _ in range(spectrogram_len-1):
             x = self.prenet(x)
             x = self.shrink(torch.cat((x, a), 2))
 
@@ -207,12 +221,13 @@ class Decoder(nn.Module):
             #attention_h = torch.cat((attention_h, a.permute(1, 0, 2)), 2)
 
             for i, rnn in enumerate(self.rnns):
+                origin = x
                 x, decoder_hs[i] = rnn(x, decoder_hs[i])
-                y = torch.cat((y, x), 1)
-
-        mel = self.mel(y)
+                x = x + origin
+            y = torch.cat((y, x), 1)
+        mel = self.relu(self.mel(y))
         y = self.cbhg(mel)
-        linear = self.linear(y)
+        linear = self.relu(self.linear(y))
         return mel, linear
 
 class Tacotron():
@@ -223,11 +238,11 @@ class Tacotron():
         self.encoder = hoge.try_gpu(self.encoder)
         self.decoder = hoge.try_gpu(self.decoder)
 
-        self.d_opt = optim.Adam(self.decoder.parameters())
-        self.e_opt = optim.Adam(self.encoder.parameters())
+        self.d_opt = optim.Adam(self.decoder.parameters(), lr=2e-3)
+        self.e_opt = optim.Adam(self.encoder.parameters(), lr=2e-3)
 
-        self.d_scheduler = optim.lr_scheduler.MultiStepLR(self.d_opt, milestones=[500e3, 1e6, 2e6], gamma=0.5)
-        self.e_scheduler = optim.lr_scheduler.MultiStepLR(self.e_opt, milestones=[500e3, 1e6, 2e6], gamma=0.5)
+        self.d_scheduler = optim.lr_scheduler.MultiStepLR(self.d_opt, milestones=[8e2, 1.6e3, 3.2e3], gamma=0.5)
+        self.e_scheduler = optim.lr_scheduler.MultiStepLR(self.e_opt, milestones=[8e2, 1.6e3, 3.2e3], gamma=0.5)
 
         self.min_valid_loss = 10000000
 
@@ -254,6 +269,8 @@ class Tacotron():
         split_num = len(tmp)//mini_batch_num
         tmp = [tmp[(i-1)*mini_batch_num:i*mini_batch_num]\
             for i in range(1, len(dirs)//mini_batch_num+1)]
+
+        start_time = time.time()
         for repeat, args in enumerate(tmp):
             if repeat < train_iter_max:
                 if len(args) != mini_batch_num:
@@ -282,12 +299,15 @@ class Tacotron():
                 self.d_opt.step()
                 self.e_opt.step()
                 train_loss_total = train_loss_total + float(loss.item())
-                if repeat%10==0:
+                if repeat%100==0:
                     print("                loss: %.3f"%(loss.item()*1000))
                     print("            mel loss: %.3f"%(mel_loss.item()*1000))
                     print("         linear loss: %.3f"%(linear_loss.item()*1000))
+                    self.evaluate(epoch*10000+repeat)
                 self.d_scheduler.step()
                 self.e_scheduler.step()
+                del loss, linear_loss, mel_loss, representation,\
+                        pred_mels, pred_linears, labels, linears, mels
 
             else:
                 if repeat%10==0:
@@ -300,13 +320,17 @@ class Tacotron():
                 linears = hoge.try_gpu(linears)
                 mels = hoge.try_gpu(mels)
                 representation = self.encoder(labels)
-                pred_mels, pred_linears = self.decoder(representation, linear.shape[1])
+                pred_mels, pred_linears = self.decoder(representation, linears.shape[1])
 
-                mel_loss = self.loss(mels, pred_mels)
-                linear_loss = self.loss(linears, pred_linears)
+                length = min(mels.shape[1], pred_mels.shape[1])
+                mel_loss = self.loss(mels[:,:length,:], pred_mels[:,:length,:])
+                linear_loss = self.loss(linears[:,:length,:], pred_linears[:,:length,:])
+                #mel_loss = self.loss(mels, pred_mels)
+                #linear_loss = self.loss(linears, pred_linears)
                 loss = mel_loss + linear_loss
                 valid_loss_total = valid_loss_total + float(loss.item())
 
+        print("implemented time: %.3f"%(time.time()-start_time))
         self.train_loss_transition.append(train_loss_total)
         self.valid_loss_transition.append(valid_loss_total)
 
@@ -339,35 +363,41 @@ class Tacotron():
         mels = hoge.try_gpu(mels)
 
         representation = self.encoder(labels)
-        pred_mels, pred_linears = self.decoder(representation, linear.shape[1])
+        pred_mels, pred_linears = self.decoder(representation, linears.shape[1])
 
-        for i, (correct_arg, predict) in enumerate(zip(sample, predicted)):
+        # visualization
+        for i, correct_arg in enumerate(sample):
             if i==3:
                 break
+            # correct spectrogram
             correct = joblib.load(ini["directory"]["dataset"]+"/spectrogram/%d"%(correct_arg))
             plt.figure()
             plt.pcolormesh(correct)
             plt.savefig("train_result/%d_%d_correct_line.png"%(epoch, correct_arg))
             plt.close()
 
+            # predicted spectrogram
             predict = pred_linears[i].cpu().detach().numpy()
             plt.figure()
             plt.pcolormesh(predict)
             plt.savefig("train_result/%d_%d_pred_line.png"%(epoch, correct_arg))
             plt.close()
 
+            # predicted waveform
             predict = istft(predict)
             plt.figure()
             plt.plot(predict[0], predict[1])
             plt.savefig("train_result/%d_%d_predict_wave.png"%(epoch, correct_arg))
             plt.close()
 
+            # correct melspectrogram
             correct = joblib.load(ini["directory"]["dataset"]+"/melspectrogram/%d"%(correct_arg))
             plt.figure()
             plt.pcolormesh(correct)
             plt.savefig("train_result/%d_%d_correct_mel.png"%(epoch, correct_arg))
             plt.close()
 
+            # predicted melspectrogram
             predict = pred_mels[i].cpu().detach().numpy()
             plt.figure()
             plt.pcolormesh(predict)
