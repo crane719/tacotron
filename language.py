@@ -55,6 +55,17 @@ class Ja():
             renew_text += word
         return renew_text
 
+    def split2list(self, text):
+        mecab = MeCab.Tagger("-Owakati")
+        text = mecab.parse(text)
+        return text.split(" ")
+
+    def del_symbol(self, text):
+        symbols = ["。", "、", "「", "」", "(", ")", "―", "？", "！"]
+        for symbol in symbols:
+            text = text.replace(symbol, "")
+        return text
+
     @property
     def get_hiralist(self):
         return self.hira_list
