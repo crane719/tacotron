@@ -116,7 +116,7 @@ class Prenet(nn.Module):
         super(Prenet, self).__init__()
         self.fc1 = nn.Linear(dim, dim)
         self.fc2 = nn.Linear(dim, 128)
-        self.dropout = nn.Dropout(0.1)
+        self.dropout = nn.Dropout(0.5)
         self.relu = nn.ReLU()
 
     def forward(self, x):
@@ -153,7 +153,8 @@ class Attention(nn.Module):
         self.softmax = nn.Softmax(dim=1)
 
     def forward(self, h, d):
-        d = d.expand(-1, h.shape[1], -1) # batch_size*1*128 =>
+        #d = d.expand(-1, h.shape[1], -1) # batch_size*1*128 =>
+        #u = self.v(self.tanh(self.w1(h)+self.w2(d)))
         u = self.v(self.tanh(self.w1(h)+self.w2(d)))
         u = u.squeeze(-1)
         a = self.softmax(u)
@@ -257,19 +258,13 @@ class Tacotron():
         self.d_opt = optim.Adam(self.decoder.parameters(), lr=1e-3)
         self.e_opt = optim.Adam(self.encoder.parameters(), lr=1e-3)
 
-        """
-        #self.d_scheduler = optim.lr_scheduler.MultiStepLR(self.d_opt, milestones=[2e3, 4e3, 8e3], gamma=0.5)
-        #self.e_scheduler = optim.lr_scheduler.MultiStepLR(self.e_opt, milestones=[2e3, 4e3, 8e3], gamma=0.5)
-        self.d_scheduler = optim.lr_scheduler.MultiStepLR(self.d_opt, milestones=[8e3, 1.6e4, 3.2e4], gamma=0.5)
-        self.e_scheduler = optim.lr_scheduler.MultiStepLR(self.e_opt, milestones=[8e3, 1.6e4, 3.2e4], gamma=0.5)
-        """
-        step_first = 200*170
+        step_first = int(ini["hyperparameter"]["opt_step"])*170
         self.d_scheduler = optim.lr_scheduler.MultiStepLR(self.d_opt, milestones=[step_first, step_first*2, step_first*4], gamma=0.5)
         self.e_scheduler = optim.lr_scheduler.MultiStepLR(self.e_opt, milestones=[step_first, step_first*2, step_first*4], gamma=0.5)
 
         self.min_valid_loss = 10000000
 
-        self.loss = nn.L1Loss(reduction="sum")
+        self.loss = nn.L1Loss()
         #self.loss = nn.MSELoss()
 
         self.train_loss_transition = []
@@ -315,6 +310,21 @@ class Tacotron():
                 pred_mels, pred_linears = self.decoder(representation, linears.shape[1])
 
                 length = min(mels.shape[1], pred_mels.shape[1])
+
+                """
+                #mel_loss = self.loss(mels[:,:length,:], pred_mels[:,:length,:])
+                mask = torch.sum(mels, 2)
+                mask = [mask != 0][0].unsqueeze(-1)
+                mask = mask.expand(-1, -1, 80)
+                mel_loss = 0.5*self.loss(mels[:,:length,:], pred_mels[:,:length,:]) +\
+                        0.5 * self.loss(mels[:, :length, :], (pred_mels[:,:length,:]*mask[:,:length,:]))
+
+                mask = torch.sum(linears,2)
+                mask = [mask != 0][0].unsqueeze(-1)
+                mask = mask.expand(-1, -1, 1025)
+                linear_loss = 0.5*self.loss(linears[:,:length,:], pred_linears[:,:length,:]) +\
+                        0.5 * self.loss(linears[:, :length, :], (pred_linears[:,:length,:]*mask[:,:length,:]))
+                """
                 mel_loss = self.loss(mels[:,:length,:], pred_mels[:,:length,:])
                 linear_loss = self.loss(linears[:,:length,:], pred_linears[:,:length,:])
                 loss = mel_loss + linear_loss
@@ -402,6 +412,7 @@ class Tacotron():
             correct = joblib.load(ini["directory"]["dataset"]+"/spectrogram/%d"%(correct_arg))
             plt.figure()
             plt.pcolormesh(correct)
+            plt.colorbar()
             plt.savefig("train_result/%d_%d_correct_line.png"%(epoch, correct_arg))
             plt.close()
 
@@ -409,6 +420,7 @@ class Tacotron():
             predict = pred_linears[i].cpu().detach().numpy()
             plt.figure()
             plt.pcolormesh(predict)
+            plt.colorbar()
             plt.savefig("train_result/%d_%d_pred_line.png"%(epoch, correct_arg))
             plt.close()
 
@@ -426,6 +438,7 @@ class Tacotron():
             correct = joblib.load(ini["directory"]["dataset"]+"/melspectrogram/%d"%(correct_arg))
             plt.figure()
             plt.pcolormesh(correct)
+            plt.colorbar()
             plt.savefig("train_result/%d_%d_correct_mel.png"%(epoch, correct_arg))
             plt.close()
 
@@ -433,6 +446,7 @@ class Tacotron():
             predict = pred_mels[i].cpu().detach().numpy()
             plt.figure()
             plt.pcolormesh(predict)
+            plt.colorbar()
             plt.savefig("train_result/%d_%d_pred_mel.png"%(epoch, correct_arg))
             plt.close()
 
@@ -461,4 +475,20 @@ class Tacotron():
         plt.plot(range(epoch), self.valid_loss_transition, label = "valid loss")
         plt.legend()
         plt.savefig("train_result/loss_transition.png")
+        plt.close()
+
+        plt.figure()
+        plt.xlabel("epochs")
+        plt.ylabel("loss")
+        plt.plot(range(epoch), self.train_loss_transition, label = "train loss")
+        plt.legend()
+        plt.savefig("train_result/train_loss_transition.png")
+        plt.close()
+
+        plt.figure()
+        plt.xlabel("epochs")
+        plt.ylabel("loss")
+        plt.plot(range(epoch), self.valid_loss_transition, label = "valid loss")
+        plt.legend()
+        plt.savefig("train_result/valid_loss_transition.png")
         plt.close()
