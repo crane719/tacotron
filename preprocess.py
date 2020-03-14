@@ -25,8 +25,8 @@ class Preprocess():
                     ini["directory"]["dataset"]+"/melspectrogram",
                     ini["directory"]["dataset"]+"/waveform_data"]
         boolean = [hoge.is_dir_existed(dir) for dir in required]
-        for tf, directory in zip(boolean, required):
-            if tf:
+        for bool, directory in zip(boolean, required):
+            if bool:
                 hoge.recreate_dir([directory])
             else:
                 hoge.make_dir([directory])
@@ -93,8 +93,12 @@ class Preprocess():
         max_len = 0
         max_mel_len = 0
 
-        ave = []
-        mel_ave = []
+        #ave = []
+        #mel_ave = []
+        ave = 0
+        mel_ave = 0
+        elements = 0
+        mel_elements = 0
         for filenum, filedir in enumerate(filedirs):
             if (filenum+1)%1000==0:
                 print("     [%d/%d]"%(filenum+1, len(filedirs)))
@@ -122,144 +126,46 @@ class Preprocess():
 
             # pre-empahasis
             renew_data = signal.lfilter([1.0, -em], 1, data)
-
-            """
-            # window
-            renew_data = np.zeros(len(data))
-            for j in range(0, len(data), window_shift):
-                if j+window_size < len(data):
-                    renew_data[j:j+window_size] += data[j:j+window_size] * np.array(window)
-            diff = len(data)%fft_point
-            tmp = np.abs(fft(renew_data)/(len(renew_data)/2))
-            renew_data = np.concatenate((renew_data, np.zeros(diff)),0)
-            """
-
-            # no voice cut
-            #no_voice_args = list(np.where(np.abs(renew_data)<np.max(np.abs(renew_data))/20))[0]
-            #renew_data = np.delete(renew_data, no_voice_args)
-            #renew_data = np.delete(data, no_voice_args)
-            """
-            spectrogram = []
-            for j in range(fft_point, len(renew_data), fft_point):
-                tmp = renew_data[j-fft_point:j]
-                spectrum = np.abs(fft(tmp) / (len(tmp)/2.0))
-                spectrogram.append(spectrum)
-            spectrogram = np.array(spectrogram)
-            """
-
-            #f, t, spectrogram = scipy.signal.spectrogram(renew_data, fs=fs, nperseg=fft_point, window=("hann"), mode="magnitude")
+            # stft
             spectrogram = librosa.core.stft(renew_data, n_fft=fft_point, hop_length=window_shift, win_length=window_size, window='hann')
-            spectrogram = librosa.amplitude_to_db(np.abs(spectrogram))
+            spectrogram = np.abs(spectrogram)
+            spectrogram = np.log(spectrogram+1e-3)
             spectrogram = spectrogram.T
+            # no voice cut
+            """
             del_args = np.where(np.max(spectrogram, axis=1) < th)[0]
             spectrogram = np.delete(spectrogram, del_args, axis=0)
-
-            s = librosa.db_to_amplitude(spectrogram).T
-            #spectrogram = librosa.util.normalize(spectrogram)
-            #spectrogram = (spectrogram-np.average(spectrogram))/np.var(spectrogram)
+            """
             joblib.dump(spectrogram, ini["directory"]["dataset"]+"/spectrogram/%d"%(filenum), compress=3)
 
+            # renew max len
             if spectrogram.shape[0] > max_len:
                 max_len = spectrogram.shape[0]
-            #tmp_max_value = np.max(spectrogram.reshape(-1))
-            #if tmp_max_value > max_value:
-            #    max_value = tmp_max_value
-            ave.append(np.average(spectrogram))
-            """
-            import matplotlib.pyplot as plt
-            f, t, spectrogram = scipy.signal.spectrogram(renew_data, fs=fs, nfft=fft_point)
-            plt.pcolormesh(spectrogram*100000)
-            plt.savefig("spectrogram.png")
-            plt.close()
-            joblib.dump(spectrogram, ini["directory"]["dataset"]+"/spectrogram/%d"%(filenum), compress=3)
-            """
+            ave += np.sum(spectrogram.reshape(-1))
+            elements += len(spectrogram.reshape(-1))
 
             # melspectrogram
             mel_spectrogram = librosa.feature.melspectrogram(renew_data,
-                                                             S=s,
-                                                             sr=rate,#int(ini["signal"]["samplingrate"]),
+                                                             S=spectrogram.T,
                                                              n_mels=int(ini["signal"]["band"]))
-            mel_spectrogram = librosa.amplitude_to_db(np.abs(mel_spectrogram))
             mel_spectrogram = mel_spectrogram.T
-            #mel_spectrogram = librosa.util.normalize(mel_spectrogram)
-            #del_args = np.where(np.max(mel_spectrogram, axis=1) < th)[0]
-            #mel_spectrogram = np.delete(mel_spectrogram, del_args, axis=0)
-            #mel_spectrogram = (mel_spectrogram-np.average(mel_spectrogram))/np.var(mel_spectrogram)
             joblib.dump(mel_spectrogram, ini["directory"]["dataset"]+"/melspectrogram/%d"%(filenum), compress=3)
             if mel_spectrogram.shape[0] > max_mel_len:
                 max_mel_len = mel_spectrogram.shape[0]
-            #if max(mel_spectrogram.reshape(-1)) > max_mel_value:
-            #    max_mel_value = max(mel_spectrogram.reshape(-1))
-            mel_ave.append(np.average(mel_spectrogram))
-
-        # spectrogram padding and normalization
-        """
-        ave = np.average(ave)
-        mel_ave = np.average(mel_ave)
-        var = []
-        mel_var = []
-        print("     calc var...")
-        dirs = hoge.get_filedirs(ini["directory"]["dataset"]+"/spectrogram/*")
-        for directory in dirs:
-            spectrogram = joblib.load(directory)
-            #spectrogram /= max_value
-            #spectrogram -= ave
-            var.append(np.average((spectrogram-ave)**2))
-            #joblib.dump(torch.Tensor(spectrogram), directory, compress=3)
-
-        # melspectrogram padding and normalization
-        dirs = hoge.get_filedirs(ini["directory"]["dataset"]+"/melspectrogram/*")
-        for directory in dirs:
-            spectrogram = joblib.load(directory)
-            #spectrogram /= max_mel_value
-            #spectrogram -= mel_ave
-            mel_var.append(np.average((spectrogram-mel_ave)**2))
-            #joblib.dump(spectrogram, directory, compress=3)
-
-        print("     normalization and no voice cut...")
-        var = np.average(var)
-        mel_var = np.average(mel_var)
-        max_len = 0
-        max_mel_len = 0
-        dirs = hoge.get_filedirs(ini["directory"]["dataset"]+"/spectrogram/*")
-        for directory in dirs:
-            spectrogram = joblib.load(directory)
-            spectrogram = (spectrogram - ave)/var
-
-            #del_args = np.where(np.max(spectrogram, axis=1) < 0.5)[0]
-            #spectrogram = np.delete(spectrogram, del_args, axis=0)
-
-            #diff = max_len - spectrogram.shape[0]
-            #spectrogram = np.concatenate((spectrogram, np.zeros((diff, spectrogram.shape[1]))), 0)
-            joblib.dump(torch.Tensor(spectrogram), directory, compress=3)
-            if spectrogram.shape[0] > max_len:
-                max_len = spectrogram.shape[0]
-
-        # melspectrogram padding and normalization
-        dirs = hoge.get_filedirs(ini["directory"]["dataset"]+"/melspectrogram/*")
-        for directory in dirs:
-            spectrogram = joblib.load(directory)
-            #diff = max_mel_len - spectrogram.shape[0]
-            spectrogram = (spectrogram - mel_ave)/mel_var
-            #spectrogram = np.concatenate((spectrogram, np.zeros((diff, spectrogram.shape[1]))), 0)
-            #del_args = np.where(np.max(spectrogram, axis=1) < 0.5)[0]
-            #spectrogram = np.delete(spectrogram, del_args, axis=0)
-            joblib.dump(torch.Tensor(spectrogram), directory, compress=3)
-            if spectrogram.shape[0] > max_mel_len:
-                max_mel_len = spectrogram.shape[0]
-        """
+            mel_ave += np.sum(mel_spectrogram.reshape(-1))
+            mel_elements += len(mel_spectrogram.reshape(-1))
 
         print("     padding...")
-        var = []
-        mel_var = []
-        ave = np.average(ave)
-        mel_ave = np.average(mel_ave)
+        var = 0
+        mel_var = 0
+        ave /= elements
+        mel_ave /= mel_elements
         dirs = hoge.get_filedirs(ini["directory"]["dataset"]+"/spectrogram/*")
         for filenum, directory in enumerate(dirs):
             if (filenum+1)%1000==0:
                 print("     [%d/%d]"%(filenum+1, len(dirs)))
             spectrogram = joblib.load(directory)
-            var.append(np.average((spectrogram-ave)**2))
+            var += np.sum((spectrogram-ave)**2)
             joblib.dump(torch.Tensor(spectrogram), directory, compress=3)
 
         # melspectrogram padding and normalization
@@ -268,14 +174,14 @@ class Preprocess():
             if (filenum+1)%1000==0:
                 print("     [%d/%d]"%(filenum+1, len(dirs)))
             spectrogram = joblib.load(directory)
-            mel_var.append(np.average((spectrogram-mel_ave)**2))
+            mel_var += np.sum((spectrogram-mel_ave)**2)
             joblib.dump(torch.Tensor(spectrogram), directory, compress=3)
 
         print("     normalization...")
-        #var = np.sqrt(np.average(var))
-        #mel_var = np.sqrt(np.average(mel_var))
-        var = np.average(var)
-        mel_var = np.average(mel_var)
+        var /= elements
+        mel_var /= mel_elements
+        var = np.sqrt(var)
+        mel_var = np.sqrt(mel_var)
         dirs = hoge.get_filedirs(ini["directory"]["dataset"]+"/spectrogram/*")
         for filenum, directory in enumerate(dirs):
             if (filenum+1)%1000==0:

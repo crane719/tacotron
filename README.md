@@ -12,9 +12,9 @@ brew install swig
 pip install mecab-python3
 ```
 
-## architecture 
+## architecture
 
-### CBHG 
+### CBHG
 
 1dconv, highway, GRUから成る
 

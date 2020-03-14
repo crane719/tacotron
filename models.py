@@ -12,6 +12,7 @@ from scipy.signal import istft
 import soundfile as sf
 import numpy as np
 import time
+from torch.autograd import Variable
 
 ja = language.Ja()
 ini = configparser.ConfigParser()
@@ -183,7 +184,7 @@ class Decoder(nn.Module):
         self.melsize = int(ini["signal"]["band"])
         self.emb = int(ini["lang"]["emb"])
 
-        self.prenet = Prenet(self.emb)
+        self.prenet = Prenet(self.melsize)
         self.cbhg = DecoderCBHG()
         self.attention = Attention()
         self.attention_rnn = nn.GRU(256+128, 256, 1, batch_first=True)
@@ -192,16 +193,26 @@ class Decoder(nn.Module):
         #self.emb_shrink = nn.Linear(256, self.emb)
         self.mel = nn.Linear(256, self.melsize*self.r)
         self.linear = nn.Linear(self.melsize*2, 1025)
+        self.mask = nn.Linear(self.melsize, 1)
+        #self.mask = nn.Linear(256//self.r, 1)
 
         self.relu = nn.ReLU()
         self.sigmoid = nn.Sigmoid()
         self.tanh = nn.Tanh()
 
-    def forward(self, representation, spectrogram_len):
+    def forward(self, representation, spectrogram_len, correct_mels=None):
         # first step
-        x = hoge.try_gpu(torch.zeros(self.batch_size, 1, self.emb)) # <GO>
-        a = hoge.try_gpu(torch.zeros(self.batch_size, 1, 256))
-        decoder_h = hoge.try_gpu(torch.zeros(1, self.batch_size, 256))
+        x = Variable(hoge.try_gpu(torch.zeros(self.batch_size, 1, self.melsize))) # <GO>
+        a = Variable(hoge.try_gpu(torch.zeros(self.batch_size, 1, 256)))
+        decoder_h = Variable(hoge.try_gpu(torch.zeros(1, self.batch_size, 256)))
+        if not correct_mels is None:
+            tmps = hoge.try_gpu(torch.Tensor())
+            for arg in range(self.r, correct_mels.shape[1], self.r):
+                args = list(range(arg-self.r, arg))
+                tmp = torch.flatten(correct_mels[:, args, :], start_dim=1)
+                tmp = tmp.unsqueeze(1)
+                tmps = torch.cat((tmps, tmp), 1)
+            correct_mels = tmps
 
         x = self.prenet(x)
         x = torch.cat((x, a), 2)
@@ -210,7 +221,7 @@ class Decoder(nn.Module):
         a = self.attention(representation, x)
 
         x = self.shrink(torch.cat((x, a), 2))
-        attention_h = x.permute(1, 0, 2)
+        #attention_h = x.permute(1, 0, 2)
         #attention_h = torch.cat((attention_h, a.permute(1, 0, 2)), 2)
 
         decoder_hs = []
@@ -218,11 +229,16 @@ class Decoder(nn.Module):
             renew, decoder_h = rnn(x, decoder_h)
             x = x + renew
             decoder_hs.append(decoder_h)
+        x = self.mel(x)
         y = x
 
-        for _ in range(int(np.floor((spectrogram_len-self.r)/self.r))):
+        for i in range(int(np.floor((spectrogram_len-self.r)/self.r))):
         #for _ in range(spectrogram_len-1):
             #x = self.emb_shrink(x)
+            if not correct_mels is None:
+                x = correct_mels[:, i, :]
+                x = x.unsqueeze(1)
+            x = x[:, :, -1*self.melsize-1:-1]
             x = self.prenet(x)
 
             x = torch.cat((x, a), 2)
@@ -236,16 +252,24 @@ class Decoder(nn.Module):
             for i, rnn in enumerate(self.rnns):
                 renew, decoder_hs[i] = rnn(x, decoder_hs[i])
                 x = x + renew
+            x = self.mel(x)
             y = torch.cat((y, x), 1)
         #mel = self.relu(self.mel(y))
         #mel = self.tanh(self.mel(y))
-        mel = self.mel(y)
-        mel = mel.view(mel.shape[0], -1, self.melsize)
+        #tmp = y.view(y.shape[0], -1, 256//self.r)
+        #mask = self.sigmoid(self.mask(tmp))
+        #mel = self.mel(y)
+        pred_mels = y
+        mel = y.view(y.shape[0], -1, self.melsize)
+        mask = self.sigmoid(self.mask(mel))
         y = self.cbhg(mel)
         linear = self.linear(y)
         #linear = self.relu(self.linear(y))
         #linear = self.tanh(self.linear(y))
-        return mel, linear
+        if not correct_mels is None:
+            return mel, linear, mask, correct_mels
+        else:
+            return mel, linear, mask
 
 class Tacotron():
     def __init__(self):
@@ -255,12 +279,14 @@ class Tacotron():
         self.encoder = hoge.try_gpu(self.encoder)
         self.decoder = hoge.try_gpu(self.decoder)
 
-        self.d_opt = optim.Adam(self.decoder.parameters(), lr=1e-3)
-        self.e_opt = optim.Adam(self.encoder.parameters(), lr=1e-3)
+        self.d_opt = optim.Adam(self.decoder.parameters(), lr=2e-3)
+        self.e_opt = optim.Adam(self.encoder.parameters(), lr=2e-3)
 
         step_first = int(ini["hyperparameter"]["opt_step"])*170
-        self.d_scheduler = optim.lr_scheduler.MultiStepLR(self.d_opt, milestones=[step_first, step_first*2, step_first*4], gamma=0.5)
-        self.e_scheduler = optim.lr_scheduler.MultiStepLR(self.e_opt, milestones=[step_first, step_first*2, step_first*4], gamma=0.5)
+        self.d_scheduler = optim.lr_scheduler.MultiStepLR(self.d_opt,\
+                milestones=[step_first, step_first*2, step_first*4, step_first*8], gamma=0.5)
+        self.e_scheduler = optim.lr_scheduler.MultiStepLR(self.e_opt,\
+                milestones=[step_first, step_first*2, step_first*4, step_first*8], gamma=0.5)
 
         self.min_valid_loss = 10000000
 
@@ -302,31 +328,63 @@ class Tacotron():
                 self.d_opt.zero_grad()
 
                 labels, linears, mels = self.get_minibatch(args)
-                labels = hoge.try_gpu(labels)
-                linears = hoge.try_gpu(linears)
-                mels = hoge.try_gpu(mels)
+                labels = Variable(hoge.try_gpu(labels))
+                linears = Variable(hoge.try_gpu(linears))
+                mels = Variable(hoge.try_gpu(mels))
 
                 representation = self.encoder(labels)
-                pred_mels, pred_linears = self.decoder(representation, linears.shape[1])
+                pred_mels, pred_linears, pred_mask, correct_mels = self.decoder(representation, linears.shape[1], mels)
 
                 length = min(mels.shape[1], pred_mels.shape[1])
 
-                """
-                #mel_loss = self.loss(mels[:,:length,:], pred_mels[:,:length,:])
+                # sum is not 0(=not 0 padding)
                 mask = torch.sum(mels, 2)
                 mask = [mask != 0][0].unsqueeze(-1)
+                correct_mask = mask
                 mask = mask.expand(-1, -1, 80)
                 mel_loss = 0.5*self.loss(mels[:,:length,:], pred_mels[:,:length,:]) +\
-                        0.5 * self.loss(mels[:, :length, :], (pred_mels[:,:length,:]*mask[:,:length,:]))
+                        0.5*self.loss(mels[:, :length, :], (pred_mels[:,:length,:]*mask[:,:length,:]))
+                """
+                mel_loss = self.loss(correct_mels[:,:length,:], pred_mels[:,:length,:])
+                """
 
+                # sum is not 0(=not 0 padding)
                 mask = torch.sum(linears,2)
                 mask = [mask != 0][0].unsqueeze(-1)
                 mask = mask.expand(-1, -1, 1025)
                 linear_loss = 0.5*self.loss(linears[:,:length,:], pred_linears[:,:length,:]) +\
-                        0.5 * self.loss(linears[:, :length, :], (pred_linears[:,:length,:]*mask[:,:length,:]))
+                        0.5*self.loss(linears[:, :length, :], (pred_linears[:,:length,:]*mask[:,:length,:]))
+
                 """
-                mel_loss = self.loss(mels[:,:length,:], pred_mels[:,:length,:])
-                linear_loss = self.loss(linears[:,:length,:], pred_linears[:,:length,:])
+                correct_mask = np.array(correct_mask.cpu().detach().numpy(), dtype=np.float)
+                correct_mask = hoge.try_gpu(torch.Tensor(correct_mask))
+                mask_loss = self.loss(correct_mask[:,:length,:], pred_mask[:,:length,:])
+                """
+                """
+                # sum is not 0(=not 0 padding)
+                mask = torch.sum(mels, 2)
+                mask = [mask != 0][0].unsqueeze(-1)
+                mask = mask.cpu().detach().numpy()
+                mask = hoge.try_gpu(torch.Tensor(np.array(mask, dtype=np.float)))
+                mask = mask.expand(-1, -1, 80)
+                mel_loss = 0.5*self.loss(mels[:, :length, :], (pred_mels[:,:length,:]*mask[:,:length,:]))
+
+                # sum is not 0(=not 0 padding)
+                mask = torch.sum(linears,2)
+                mask = [mask != 0][0].unsqueeze(-1)
+                mask = mask.cpu().detach().numpy()
+                mask = hoge.try_gpu(torch.Tensor(np.array(mask, dtype=np.float)))
+                correct_mask = mask
+                mask = mask.expand(-1, -1, 1025)
+                linear_loss = 0.5*self.loss(linears[:, :length, :], (pred_linears[:,:length,:]*mask[:,:length,:]))
+
+                #correct_mask = np.array(correct_mask.cpu().detach().numpy(), dtype=np.float)
+                #correct_mask = hoge.try_gpu(torch.Tensor(correct_mask))
+                mask_loss = self.loss(correct_mask[:,:length,:], pred_mask[:,:length,:])
+                #mel_loss = self.loss(mels[:,:length,:], pred_mels[:,:length,:])
+                #linear_loss = self.loss(linears[:,:length,:], pred_linears[:,:length,:])
+                #loss = linear_loss + mask_loss
+                """
                 loss = mel_loss + linear_loss
                 loss.backward()
 
@@ -337,6 +395,7 @@ class Tacotron():
                     print("                loss: %.3f"%(loss.item()*1000))
                     print("            mel loss: %.3f"%(mel_loss.item()*1000))
                     print("         linear loss: %.3f"%(linear_loss.item()*1000))
+                    #print("           mask loss: %.3f"%(mask_loss.item()*1000))
                     #self.evaluate(epoch*10000+repeat)
                 self.d_scheduler.step()
                 self.e_scheduler.step()
@@ -356,7 +415,7 @@ class Tacotron():
                 linears = hoge.try_gpu(linears)
                 mels = hoge.try_gpu(mels)
                 representation = self.encoder(labels)
-                pred_mels, pred_linears = self.decoder(representation, linears.shape[1])
+                pred_mels, pred_linears, _ = self.decoder(representation, linears.shape[1])
 
                 length = min(mels.shape[1], pred_mels.shape[1])
                 mel_loss = self.loss(mels[:,:length,:], pred_mels[:,:length,:])
@@ -373,8 +432,14 @@ class Tacotron():
         self.train_loss_transition.append(train_loss_total/train_iter_max)
         self.valid_loss_transition.append(valid_loss_total/(repeat-train_iter_max))
 
+        """
         if self.min_valid_loss>valid_loss_total:
             self.min_valid_loss = valid_loss_total
+            torch.save(self.decoder.state_dict(), "param/dweight")
+            torch.save(self.encoder.state_dict(), "param/eweight")
+        """
+        if self.min_valid_loss>train_loss_total:
+            self.min_valid_loss = train_loss_total
             torch.save(self.decoder.state_dict(), "param/dweight")
             torch.save(self.encoder.state_dict(), "param/eweight")
 
@@ -402,7 +467,8 @@ class Tacotron():
         mels = hoge.try_gpu(mels)
 
         representation = self.encoder(labels)
-        pred_mels, pred_linears = self.decoder(representation, linears.shape[1])
+        pred_mels, pred_linears, _, _ = self.decoder(representation, linears.shape[1], mels)
+        pred_mels2, pred_linears2, _ = self.decoder(representation, linears.shape[1])
 
         # visualization
         for i, correct_arg in enumerate(sample):
@@ -421,7 +487,15 @@ class Tacotron():
             plt.figure()
             plt.pcolormesh(predict)
             plt.colorbar()
-            plt.savefig("train_result/%d_%d_pred_line.png"%(epoch, correct_arg))
+            plt.savefig("train_result/%d_%d_pred_line1.png"%(epoch, correct_arg))
+            plt.close()
+
+            # predicted spectrogram
+            predict = pred_linears2[i].cpu().detach().numpy()
+            plt.figure()
+            plt.pcolormesh(predict)
+            plt.colorbar()
+            plt.savefig("train_result/%d_%d_pred_line2.png"%(epoch, correct_arg))
             plt.close()
 
             # predicted waveform
@@ -447,7 +521,15 @@ class Tacotron():
             plt.figure()
             plt.pcolormesh(predict)
             plt.colorbar()
-            plt.savefig("train_result/%d_%d_pred_mel.png"%(epoch, correct_arg))
+            plt.savefig("train_result/%d_%d_pred_mel1.png"%(epoch, correct_arg))
+            plt.close()
+
+            # predicted melspectrogram
+            predict = pred_mels2[i].cpu().detach().numpy()
+            plt.figure()
+            plt.pcolormesh(predict)
+            plt.colorbar()
+            plt.savefig("train_result/%d_%d_pred_mel2.png"%(epoch, correct_arg))
             plt.close()
 
     def get_minibatch(self, args):
