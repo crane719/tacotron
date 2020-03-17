@@ -17,7 +17,6 @@ from torch.autograd import Variable
 ja = language.Ja()
 ini = configparser.ConfigParser()
 ini.read("./config.ini")
-dictionary = joblib.load("param/dictionary")
 
 class EncoderCBHG(nn.Module):
     def __init__(self):
@@ -163,12 +162,12 @@ class Attention(nn.Module):
         return attention
 
 class Encoder(nn.Module):
-    def __init__(self):
+    def __init__(self, dict_len):
         super(Encoder, self).__init__()
         emb = int(ini["lang"]["emb"])
         self.prenet = Prenet(emb)
         self.cbhg = EncoderCBHG()
-        self.emb = nn.Embedding(len(dictionary)+1, emb, padding_idx = len(dictionary))
+        self.emb = nn.Embedding(dict_len+1, emb, padding_idx = dict_len)
 
     def forward(self, labels):
         x = self.emb(labels)
@@ -273,7 +272,8 @@ class Decoder(nn.Module):
 
 class Tacotron():
     def __init__(self):
-        self.encoder = Encoder()
+        self.dictionary = joblib.load("param/dictionary")
+        self.encoder = Encoder(len(self.dictionary))
         self.decoder = Decoder()
 
         self.encoder = hoge.try_gpu(self.encoder)

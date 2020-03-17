@@ -5,7 +5,7 @@ import hoge
 import shutil
 
 is_preprocess = False
-#is_preprocess = True
+is_preprocess = True
 
 ini = configparser.ConfigParser()
 ini.read("./config.ini")
