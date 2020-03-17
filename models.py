@@ -279,8 +279,8 @@ class Tacotron():
         self.encoder = hoge.try_gpu(self.encoder)
         self.decoder = hoge.try_gpu(self.decoder)
 
-        self.d_opt = optim.Adam(self.decoder.parameters(), lr=2e-3)
-        self.e_opt = optim.Adam(self.encoder.parameters(), lr=2e-3)
+        self.d_opt = optim.Adam(self.decoder.parameters(), lr=1e-3)
+        self.e_opt = optim.Adam(self.encoder.parameters(), lr=1e-3)
 
         step_first = int(ini["hyperparameter"]["opt_step"])*170
         self.d_scheduler = optim.lr_scheduler.MultiStepLR(self.d_opt,\
@@ -289,6 +289,7 @@ class Tacotron():
                 milestones=[step_first, step_first*2, step_first*4, step_first*8], gamma=0.5)
 
         self.min_valid_loss = 10000000
+        self.clip_th = float(ini["hyperparameter"]["clip_th"])
 
         self.loss = nn.L1Loss()
         #self.loss = nn.MSELoss()
@@ -342,24 +343,28 @@ class Tacotron():
                 mask = [mask != 0][0].unsqueeze(-1)
                 correct_mask = mask
                 mask = mask.expand(-1, -1, 80)
+                """
                 mel_loss = 0.5*self.loss(mels[:,:length,:], pred_mels[:,:length,:]) +\
                         0.5*self.loss(mels[:, :length, :], (pred_mels[:,:length,:]*mask[:,:length,:]))
                 """
-                mel_loss = self.loss(correct_mels[:,:length,:], pred_mels[:,:length,:])
-                """
+                mel_loss = self.loss(mels[:,:length,:], pred_mels[:,:length,:])
 
                 # sum is not 0(=not 0 padding)
                 mask = torch.sum(linears,2)
                 mask = [mask != 0][0].unsqueeze(-1)
                 mask = mask.expand(-1, -1, 1025)
+                """
                 linear_loss = 0.5*self.loss(linears[:,:length,:], pred_linears[:,:length,:]) +\
                         0.5*self.loss(linears[:, :length, :], (pred_linears[:,:length,:]*mask[:,:length,:]))
+                """
+                linear_loss = self.loss(linears[:,:length,:], pred_linears[:,:length,:])
 
                 """
                 correct_mask = np.array(correct_mask.cpu().detach().numpy(), dtype=np.float)
                 correct_mask = hoge.try_gpu(torch.Tensor(correct_mask))
                 mask_loss = self.loss(correct_mask[:,:length,:], pred_mask[:,:length,:])
                 """
+
                 """
                 # sum is not 0(=not 0 padding)
                 mask = torch.sum(mels, 2)
@@ -387,6 +392,8 @@ class Tacotron():
                 """
                 loss = mel_loss + linear_loss
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), self.clip_th)
+                torch.nn.utils.clip_grad_norm_(self.decoder.parameters(), self.clip_th)
 
                 self.d_opt.step()
                 self.e_opt.step()
