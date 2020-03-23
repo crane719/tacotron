@@ -12,6 +12,7 @@ from scipy.signal import istft
 import soundfile as sf
 import numpy as np
 import time
+import librosa
 from torch.autograd import Variable
 
 ja = language.Ja()
@@ -271,7 +272,7 @@ class Decoder(nn.Module):
             return mel, linear, mask
 
 class Tacotron():
-    def __init__(self):
+    def __init__(self, is_load):
         self.dictionary = joblib.load("param/dictionary")
         self.encoder = Encoder(len(self.dictionary))
         self.decoder = Decoder()
@@ -279,9 +280,12 @@ class Tacotron():
         self.encoder = hoge.try_gpu(self.encoder)
         self.decoder = hoge.try_gpu(self.decoder)
 
-        self.d_opt = optim.Adam(self.decoder.parameters(), lr=1e-3)
-        self.e_opt = optim.Adam(self.encoder.parameters(), lr=1e-3)
-
+        self.d_opt = optim.Adam(self.decoder.parameters(), lr=5e-4)
+        self.e_opt = optim.Adam(self.encoder.parameters(), lr=5e-4)
+        if is_load:
+            torch.load("param/dweight", map_location="cpu")
+            self.decoder.load_state_dict(torch.load("param/dweight", map_location="cpu"))
+            self.encoder.load_state_dict(torch.load("param/eweight", map_location="cpu"))
         step_first = int(ini["hyperparameter"]["opt_step"])*170
         self.d_scheduler = optim.lr_scheduler.MultiStepLR(self.d_opt,\
                 milestones=[step_first, step_first*2, step_first*4, step_first*8], gamma=0.5)
@@ -450,7 +454,7 @@ class Tacotron():
             torch.save(self.decoder.state_dict(), "param/dweight")
             torch.save(self.encoder.state_dict(), "param/eweight")
 
-    def evaluate(self, epoch):
+    def evaluate(self, epoch=0, mode="train"):
         dirs = glob.glob(ini["directory"]["dataset"]+"/spectrogram/*")
         data_num = len(dirs)
         mini_batch_num = int(ini["hyperparameter"]["batch_size"])
@@ -486,7 +490,7 @@ class Tacotron():
             plt.figure()
             plt.pcolormesh(correct)
             plt.colorbar()
-            plt.savefig("train_result/%d_%d_correct_line.png"%(epoch, correct_arg))
+            plt.savefig(mode+"_result/%d_%d_correct_line.png"%(epoch, correct_arg))
             plt.close()
 
             # predicted spectrogram
@@ -494,33 +498,46 @@ class Tacotron():
             plt.figure()
             plt.pcolormesh(predict)
             plt.colorbar()
-            plt.savefig("train_result/%d_%d_pred_line1.png"%(epoch, correct_arg))
+            plt.savefig(mode+"_result/%d_%d_pred_line1.png"%(epoch, correct_arg))
             plt.close()
+
+            # predicted waveform
+            predict = librosa.core.griffinlim(predict.transpose(), n_iter=50)
+            plt.figure()
+            #plt.plot(predict[0], predict[1])
+            plt.plot(predict)
+            plt.savefig(mode+"_result/%d_%d_predict_wave1.png"%(epoch, correct_arg))
+            plt.close()
+
+            # wav data
+            sf.write(mode+"_result/%d_%d_predict_wave1.wav"%(epoch, correct_arg), predict, sampling_rate)
 
             # predicted spectrogram
             predict = pred_linears2[i].cpu().detach().numpy()
             plt.figure()
             plt.pcolormesh(predict)
             plt.colorbar()
-            plt.savefig("train_result/%d_%d_pred_line2.png"%(epoch, correct_arg))
+            plt.savefig(mode+"_result/%d_%d_pred_line2.png"%(epoch, correct_arg))
             plt.close()
 
             # predicted waveform
-            predict = istft(predict)
+            predict = librosa.core.griffinlim(predict.transpose(), n_iter=50)
             plt.figure()
-            plt.plot(predict[0], predict[1])
-            plt.savefig("train_result/%d_%d_predict_wave.png"%(epoch, correct_arg))
+            #plt.plot(predict[0], predict[1])
+            plt.plot(predict)
+            plt.savefig(mode+"_result/%d_%d_predict_wave2.png"%(epoch, correct_arg))
             plt.close()
 
             # wav data
-            sf.write("train_result/%d_%d_predict_wave.wav"%(epoch, correct_arg), predict[1], sampling_rate)
+            sf.write(mode+"_result/%d_%d_predict_wave2.wav"%(epoch, correct_arg), predict, sampling_rate)
+
 
             # correct melspectrogram
             correct = joblib.load(ini["directory"]["dataset"]+"/melspectrogram/%d"%(correct_arg))
             plt.figure()
             plt.pcolormesh(correct)
             plt.colorbar()
-            plt.savefig("train_result/%d_%d_correct_mel.png"%(epoch, correct_arg))
+            plt.savefig(mode+"_result/%d_%d_correct_mel.png"%(epoch, correct_arg))
             plt.close()
 
             # predicted melspectrogram
@@ -528,7 +545,7 @@ class Tacotron():
             plt.figure()
             plt.pcolormesh(predict)
             plt.colorbar()
-            plt.savefig("train_result/%d_%d_pred_mel1.png"%(epoch, correct_arg))
+            plt.savefig(mode+"_result/%d_%d_pred_mel1.png"%(epoch, correct_arg))
             plt.close()
 
             # predicted melspectrogram
@@ -536,7 +553,7 @@ class Tacotron():
             plt.figure()
             plt.pcolormesh(predict)
             plt.colorbar()
-            plt.savefig("train_result/%d_%d_pred_mel2.png"%(epoch, correct_arg))
+            plt.savefig(mode+"_result/%d_%d_pred_mel2.png"%(epoch, correct_arg))
             plt.close()
 
     def get_minibatch(self, args):

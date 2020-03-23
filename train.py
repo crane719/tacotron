@@ -5,7 +5,8 @@ import hoge
 import shutil
 
 is_preprocess = False
-is_preprocess = True
+#is_preprocess = True
+is_load = True
 
 ini = configparser.ConfigParser()
 ini.read("./config.ini")
@@ -21,7 +22,7 @@ hoge.make_dir(required_dirs)
 if is_preprocess:
     pp.Preprocess()
 
-tacotron = models.Tacotron()
+tacotron = models.Tacotron(is_load)
 
 for epoch in range(1, int(ini["hyperparameter"]["epoch_num"])+1):
     tacotron.train(epoch)
