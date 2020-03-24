@@ -129,7 +129,7 @@ class Preprocess():
             # stft
             spectrogram = librosa.core.stft(renew_data, n_fft=fft_point, hop_length=window_shift, win_length=window_size, window='hann')
             spectrogram = np.abs(spectrogram)
-            spectrogram = np.log(spectrogram+1e-3)
+            spectrogram = np.log(spectrogram)
             spectrogram = spectrogram.T
             # no voice cut
             """

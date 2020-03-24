@@ -280,8 +280,8 @@ class Tacotron():
         self.encoder = hoge.try_gpu(self.encoder)
         self.decoder = hoge.try_gpu(self.decoder)
 
-        self.d_opt = optim.Adam(self.decoder.parameters(), lr=5e-4)
-        self.e_opt = optim.Adam(self.encoder.parameters(), lr=5e-4)
+        self.d_opt = optim.Adam(self.decoder.parameters(), lr=2e-3)
+        self.e_opt = optim.Adam(self.encoder.parameters(), lr=2e-3)
         if is_load:
             torch.load("param/dweight", map_location="cpu")
             self.decoder.load_state_dict(torch.load("param/dweight", map_location="cpu"))
@@ -502,7 +502,9 @@ class Tacotron():
             plt.close()
 
             # predicted waveform
-            predict = librosa.core.griffinlim(predict.transpose(), n_iter=50)
+            window_shift = int(ini["signal"]["window_shift"])
+            window_size = int(ini["signal"]["window_size"])
+            predict = librosa.core.griffinlim(np.exp(predict.transpose()), n_iter=50, hop_length=window_shift, win_length=window_size)
             plt.figure()
             #plt.plot(predict[0], predict[1])
             plt.plot(predict)
