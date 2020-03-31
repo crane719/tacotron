@@ -132,10 +132,8 @@ class Preprocess():
             spectrogram = np.log(spectrogram)
             spectrogram = spectrogram.T
             # no voice cut
-            """
             del_args = np.where(np.max(spectrogram, axis=1) < th)[0]
             spectrogram = np.delete(spectrogram, del_args, axis=0)
-            """
             joblib.dump(spectrogram, ini["directory"]["dataset"]+"/spectrogram/%d"%(filenum), compress=3)
 
             # renew max len
@@ -155,7 +153,7 @@ class Preprocess():
             mel_ave += np.sum(mel_spectrogram.reshape(-1))
             mel_elements += len(mel_spectrogram.reshape(-1))
 
-        print("     padding...")
+        print("     calc var...")
         var = 0
         mel_var = 0
         ave /= elements
@@ -177,7 +175,7 @@ class Preprocess():
             mel_var += np.sum((spectrogram-mel_ave)**2)
             joblib.dump(torch.Tensor(spectrogram), directory, compress=3)
 
-        print("     normalization...")
+        print("     normalization and padding...")
         var /= elements
         mel_var /= mel_elements
         var = np.sqrt(var)

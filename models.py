@@ -117,12 +117,14 @@ class Prenet(nn.Module):
         super(Prenet, self).__init__()
         self.fc1 = nn.Linear(dim, dim)
         self.fc2 = nn.Linear(dim, 128)
-        self.dropout = nn.Dropout(0.5)
+        self.dropout = nn.Dropout(0.2)
         self.relu = nn.ReLU()
 
     def forward(self, x):
-        x = self.dropout(self.relu(self.fc1(x)))
-        x = self.dropout(self.relu(self.fc2(x)))
+        #x = self.dropout(self.relu(self.fc1(x)))
+        #x = self.dropout(self.relu(self.fc2(x)))
+        x = self.relu(self.fc1(x))
+        x = self.relu(self.fc2(x))
         return x
 
 class Highway_net(nn.Module):
@@ -347,53 +349,18 @@ class Tacotron():
                 mask = [mask != 0][0].unsqueeze(-1)
                 correct_mask = mask
                 mask = mask.expand(-1, -1, 80)
-                """
                 mel_loss = 0.5*self.loss(mels[:,:length,:], pred_mels[:,:length,:]) +\
                         0.5*self.loss(mels[:, :length, :], (pred_mels[:,:length,:]*mask[:,:length,:]))
-                """
-                mel_loss = self.loss(mels[:,:length,:], pred_mels[:,:length,:])
+                #mel_loss = self.loss(mels[:,:length,:], pred_mels[:,:length,:])
 
                 # sum is not 0(=not 0 padding)
                 mask = torch.sum(linears,2)
                 mask = [mask != 0][0].unsqueeze(-1)
                 mask = mask.expand(-1, -1, 1025)
-                """
                 linear_loss = 0.5*self.loss(linears[:,:length,:], pred_linears[:,:length,:]) +\
                         0.5*self.loss(linears[:, :length, :], (pred_linears[:,:length,:]*mask[:,:length,:]))
-                """
-                linear_loss = self.loss(linears[:,:length,:], pred_linears[:,:length,:])
-
-                """
-                correct_mask = np.array(correct_mask.cpu().detach().numpy(), dtype=np.float)
-                correct_mask = hoge.try_gpu(torch.Tensor(correct_mask))
-                mask_loss = self.loss(correct_mask[:,:length,:], pred_mask[:,:length,:])
-                """
-
-                """
-                # sum is not 0(=not 0 padding)
-                mask = torch.sum(mels, 2)
-                mask = [mask != 0][0].unsqueeze(-1)
-                mask = mask.cpu().detach().numpy()
-                mask = hoge.try_gpu(torch.Tensor(np.array(mask, dtype=np.float)))
-                mask = mask.expand(-1, -1, 80)
-                mel_loss = 0.5*self.loss(mels[:, :length, :], (pred_mels[:,:length,:]*mask[:,:length,:]))
-
-                # sum is not 0(=not 0 padding)
-                mask = torch.sum(linears,2)
-                mask = [mask != 0][0].unsqueeze(-1)
-                mask = mask.cpu().detach().numpy()
-                mask = hoge.try_gpu(torch.Tensor(np.array(mask, dtype=np.float)))
-                correct_mask = mask
-                mask = mask.expand(-1, -1, 1025)
-                linear_loss = 0.5*self.loss(linears[:, :length, :], (pred_linears[:,:length,:]*mask[:,:length,:]))
-
-                #correct_mask = np.array(correct_mask.cpu().detach().numpy(), dtype=np.float)
-                #correct_mask = hoge.try_gpu(torch.Tensor(correct_mask))
-                mask_loss = self.loss(correct_mask[:,:length,:], pred_mask[:,:length,:])
-                #mel_loss = self.loss(mels[:,:length,:], pred_mels[:,:length,:])
                 #linear_loss = self.loss(linears[:,:length,:], pred_linears[:,:length,:])
-                #loss = linear_loss + mask_loss
-                """
+
                 loss = mel_loss + linear_loss
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), self.clip_th)
