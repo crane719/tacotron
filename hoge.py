@@ -1,3 +1,5 @@
+import sys
+import argparse
 import glob
 import os
 from collections import OrderedDict
@@ -5,6 +7,14 @@ import collections
 import matplotlib.pyplot as plt
 import numpy as np
 import shutil
+
+def get_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--preprocess", action="store_true")
+    parser.add_argument("--load", action="store_true")
+
+    args = parser.parse_args()
+    return args
 
 def try_gpu(obj):
     import torch

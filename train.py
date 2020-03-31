@@ -4,10 +4,14 @@ import configparser
 import hoge
 import shutil
 
-is_preprocess = False
-#is_preprocess = True
-#is_load = True
-is_load = False
+args = hoge.get_args()
+is_preprocess = args.preprocess
+is_load = args.load
+
+if is_preprocess is None:
+    is_preprocess = False
+if is_load is None:
+    is_load = False
 
 ini = configparser.ConfigParser()
 ini.read("./config.ini")
