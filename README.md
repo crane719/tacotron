@@ -3,13 +3,33 @@
 
 - mecabのinstall
 
-日本語を扱うttsを想定しているため, mecabを用いて形態素解析
+日本語を扱うttsを想定しているため, mecabを用いて形態素解析. macの場合は以下
 
-```
+```bash:
 brew install mecab
 brew install mecab-ipadic
 brew install swig
 pip install mecab-python3
+```
+
+- pythonのpackageのinstall
+
+```bash:
+pip install -r requrements.txt
+```
+
+- datasetのinstall
+
+https://www.kaggle.com/bryanpark/japanese-single-speaker-speech-dataset/data を使って学習を行っている.  
+directory内にdatasetをダウンロード
+
+
+## train
+
+以下のコマンドで学習. 前処理を行いデータセットを作成する場合は引数としてpreprocessを指定. 学習した重みを読み込み直し、学習を行う場合は、loadを指定
+
+```bash:
+python train.py --preprocess --load
 ```
 
 ## architecture
